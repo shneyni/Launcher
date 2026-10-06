@@ -27,6 +27,12 @@ jobs:
         id: signing
         shell: bash
         run: |
+          if [[ -z "$ANDROID_KEYSTORE_BASE64" && -f signing/launcher-release.p12 ]]; then
+            ANDROID_KEYSTORE_BASE64="$(base64 signing/launcher-release.p12 | tr -d '\012')"
+          fi
+          if [[ -z "$ANDROID_KEYSTORE_PASSWORD" && -f signing/keystore-password.txt ]]; then
+            ANDROID_KEYSTORE_PASSWORD="$(tr -d '\015\012' < signing/keystore-password.txt)"
+          fi
           if [[ -n "$ANDROID_KEYSTORE_BASE64" && -n "$ANDROID_KEYSTORE_PASSWORD" ]]; then
             KEYSTORE_PATH="$RUNNER_TEMP/launcher-signing.p12"
             printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
@@ -35,20 +41,23 @@ jobs:
               echo "Could not find a private-key alias in the signing keystore." >&2
               exit 1
             fi
+            echo "::add-mask::$ANDROID_KEYSTORE_PASSWORD"
             echo "ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
             echo "ANDROID_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Build signed release APK
         if: steps.signing.outputs.enabled == 'true'
-        run: ./gradlew --no-daemon assembleRelease -PVERSION_CODE="$GITHUB_RUN_NUMBER"
+        run: bash ./gradlew --no-daemon assembleRelease -PVERSION_CODE="$GITHUB_RUN_NUMBER"
       - name: Stage signed APK
         if: steps.signing.outputs.enabled == 'true'
         id: release_apk
         run: |
-          APK="Launcher-v1.0.${GITHUB_RUN_NUMBER}.apk"
+          APK="Launcher-v1.0.${{ github.run_number }}.apk"
           cp app/build/outputs/apk/release/app-release.apk "$APK"
           echo "path=$APK" >> "$GITHUB_OUTPUT"
       - name: Publish signed APK artifact
@@ -68,8 +77,8 @@ jobs:
           files: ${{ steps.release_apk.outputs.path }}
       - name: Build test-only APK (no persistent release key configured)
         if: steps.signing.outputs.enabled != 'true'
-        run: ./gradlew --no-daemon assembleDebug -PVERSION_CODE="$GITHUB_RUN_NUMBER"
-      - name: Publish test-only APK artifact
+        run: bash ./gradlew --no-daemon assembleDebug -PVERSION_CODE="$GITHUB_RUN_NUMBER"
+      - name: Publish test-only APK
         if: steps.signing.outputs.enabled != 'true'
         uses: actions/upload-artifact@v4
         with:
