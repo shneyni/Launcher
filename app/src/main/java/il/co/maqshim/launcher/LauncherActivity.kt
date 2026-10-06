@@ -61,7 +61,7 @@ class LauncherActivity : ComponentActivity() {
     private var apps: List<LaunchableApp> = emptyList()
     private var shortcuts: MutableList<String> = mutableListOf()
     private var pendingShortcuts: MutableSet<String> = mutableSetOf()
-    private var permissionPrompted = false
+    private var permissionPrompted = false; private var statusReceiverRegistered = false; private val statusReceiver = object : android.content.BroadcastReceiver() { override fun onReceive(context: Context?, intent: Intent?) { if (::root.isInitialized && page == Page.HOME) render() } }
     private val handler = Handler(Looper.getMainLooper())
     private val clockTick = object : Runnable {
         override fun run() {
@@ -95,7 +95,7 @@ class LauncherActivity : ComponentActivity() {
     }
 
     override fun onResume() {
-        super.onResume()
+        super.onResume(); if (!statusReceiverRegistered) { val filter=android.content.IntentFilter().apply { addAction(BluetoothAdapter.ACTION_STATE_CHANGED); addAction(WifiManager.WIFI_STATE_CHANGED_ACTION); addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION); addAction(WifiManager.RSSI_CHANGED_ACTION); addAction(Intent.ACTION_BATTERY_CHANGED); addAction(Intent.ACTION_POWER_CONNECTED); addAction(Intent.ACTION_POWER_DISCONNECTED) }; if (Build.VERSION.SDK_INT >= 33) registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(statusReceiver, filter); statusReceiverRegistered=true }
         handler.removeCallbacks(clockTick)
         handler.post(clockTick)
         readApps()
@@ -105,7 +105,7 @@ class LauncherActivity : ComponentActivity() {
 
     override fun onPause() {
         handler.removeCallbacks(clockTick)
-        super.onPause()
+        if (statusReceiverRegistered) { runCatching { unregisterReceiver(statusReceiver) }; statusReceiverRegistered=false }; super.onPause()
     }
 
     @Suppress("DEPRECATION")
@@ -333,7 +333,7 @@ class LauncherActivity : ComponentActivity() {
         val right = if (page == Page.HOME) "אנשי קשר" else "אחורה"
         val leftBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; layoutDirection = View.LAYOUT_DIRECTION_LTR }
         if (page == Page.HOME) leftBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_shortcuts); contentDescription = "קיצורים" }, LinearLayout.LayoutParams(dp(29), dp(29)))
-        if (page != Page.HOME) leftBox.addView(if (page == Page.MANAGE || page == Page.REORDER) label(left, 13, WHITE, true).apply { contentDescription = "מקש שמאל: $left" } else ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_options); contentDescription = "אפשרויות"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(29), dp(29)))
+        if (page != Page.HOME) leftBox.addView(if (page == Page.MANAGE || page == Page.REORDER) label(left, 13, WHITE, true).apply { contentDescription = "מקש שמאל: $left" } else ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_options); contentDescription = "אפשרויות"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(34), dp(34)))
         addView(leftBox, LinearLayout.LayoutParams(0, -1, 1f))
         val rightBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; layoutDirection = View.LAYOUT_DIRECTION_LTR }
         if (page == Page.HOME) rightBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_contacts); contentDescription = "אנשי קשר" }, LinearLayout.LayoutParams(dp(27), dp(27)))
@@ -550,7 +550,7 @@ private class NokiaStatusGlyph(context: android.content.Context, private val kin
                     val r = sx * (.26f + .2f * k)
                     canvas.drawArc(RectF(cx-r, cy-r, cx+r, cy+r), -135f, 90f, false, stroke)
                 }
-                fill.color = if (runCatching { val wm = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? WifiManager; val info = wm?.connectionInfo; wm?.isWifiEnabled == true && info != null && info.networkId != -1 }.getOrDefault(false)) YELLOW else 0x667F8588
+                fill.color = if (runCatching { val wm = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? WifiManager; val info = wm?.connectionInfo; wm?.isWifiEnabled == true && info != null && info.networkId != -1 }.getOrDefault(false)) Color.WHITE else 0x667F8588
                 canvas.drawCircle(cx, cy, sx * .07f, fill)
             }
             "bluetooth" -> {
@@ -558,12 +558,12 @@ private class NokiaStatusGlyph(context: android.content.Context, private val kin
                 canvas.drawPath(p, stroke)
             }
             "battery" -> {
-                val bw=sx*.84f; val bh=sy*.56f; val top=(sy-bh)/2
+                val batteryState=runCatching { context.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }.getOrNull(); val batteryLevel=(batteryState?.let { val raw=it.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL,-1); val scale=it.getIntExtra(android.os.BatteryManager.EXTRA_SCALE,100); if (raw >= 0 && scale > 0) (raw*100/scale).coerceIn(0,100) else 0 } ?: 0); val charging=batteryState?.let { val s=it.getIntExtra(android.os.BatteryManager.EXTRA_STATUS,-1); s == android.os.BatteryManager.BATTERY_STATUS_CHARGING || s == android.os.BatteryManager.BATTERY_STATUS_FULL } == true; val bw=sx*.84f; val bh=sy*.56f; val top=(sy-bh)/2
                 stroke.color=0x99FFFFFF.toInt(); stroke.strokeWidth=sx*.06f
                 canvas.drawRoundRect(RectF(0f,top,bw,top+bh),bh*.28f,bh*.28f,stroke)
-                fill.color=YELLOW
-                canvas.drawRoundRect(RectF(sx*.07f,top+sx*.07f,bw-sx*.14f,top+bh-sx*.07f),bh*.22f,bh*.22f,fill)
-                fill.color=0x99FFFFFF.toInt()
+                fill.color=Color.WHITE
+                canvas.drawRoundRect(RectF(sx*.07f,top+sx*.07f,sx*.07f+(bw-sx*.21f)*(batteryLevel/100f),top+bh-sx*.07f),bh*.22f,bh*.22f,fill)
+                if (charging) { fill.color=if (batteryLevel >= 60) BLACK else Color.WHITE; val bolt=Path().apply { moveTo(sx*.51f,top+bh*.18f); lineTo(sx*.39f,top+bh*.53f); lineTo(sx*.49f,top+bh*.53f); lineTo(sx*.44f,top+bh*.82f); lineTo(sx*.64f,top+bh*.43f); lineTo(sx*.54f,top+bh*.43f); close() }; canvas.drawPath(bolt,fill) }; fill.color=0x99FFFFFF.toInt()
                 canvas.drawRoundRect(RectF(bw+sx*.02f,sy*.4f,bw+sx*.09f,sy*.6f),sx*.03f,sx*.03f,fill)
             }
         }
