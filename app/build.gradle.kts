@@ -10,6 +10,13 @@ val signingStorePath = System.getenv("ANDROID_KEYSTORE_PATH")
 android {
     namespace = "il.co.maqshim.launcher"
     compileSdk = 35
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
     defaultConfig {
         applicationId = "il.co.maqshim.launcher"
         minSdk = 26
