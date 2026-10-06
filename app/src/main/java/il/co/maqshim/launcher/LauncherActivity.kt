@@ -181,7 +181,7 @@ class LauncherActivity : ComponentActivity() {
         val simRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; layoutDirection = View.LAYOUT_DIRECTION_RTL }
         val simLabel = simStatus()
         val simIcon = ImageView(this).apply {
-            setImageResource(if (simLabel == "הכנס כרטיס SIM") R.drawable.sim_missing else R.drawable.sim_card)
+            setImageResource(if (simLabel == "הכנס כרטיס SIM") R.drawable.ic_sim_missing else R.drawable.ic_sim_card)
             contentDescription = "כרטיס SIM"
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
@@ -229,9 +229,9 @@ class LauncherActivity : ComponentActivity() {
             layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
         val cellHeight = ((resources.displayMetrics.heightPixels / resources.displayMetrics.density - 27f - 43f - 27f - 20f) / 3f)
-            .toInt().coerceIn(80, 116)
+            .toInt().coerceIn(84, 124)
         apps.forEachIndexed { index, app ->
-            val cell = appCell(app, index == selected, index, (cellHeight * .38f).toInt().coerceIn(28, 43))
+            val cell = appCell(app, index == selected, index, (cellHeight * .44f).toInt().coerceIn(32, 50))
             grid.addView(cell, GridLayout.LayoutParams().apply {
                 width = 0; height = dp(cellHeight)
                 columnSpec = GridLayout.spec(index % 3, 1, 1f)
@@ -251,7 +251,7 @@ class LauncherActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(3), dp(5), dp(3), dp(4))
-            setBackgroundColor(if (isSelected) YELLOW else 0xFF141719.toInt())
+            background = android.graphics.drawable.GradientDrawable().apply { setColor(if (isSelected) YELLOW else 0xFF141719.toInt()); cornerRadius = dp(if (isSelected) 18 else 4).toFloat() }
             contentDescription = "${app.label}${if (isSelected) ", נבחר" else ""}"
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
@@ -322,18 +322,18 @@ class LauncherActivity : ComponentActivity() {
         setPadding(dp(14), 0, dp(14), 0)
         setBackgroundColor(0xFF101315.toInt())
         val left = when (page) {
-            Page.HOME -> "▤  קיצורים"
-            Page.MANAGE, Page.REORDER -> "✓  שמירה"
-            else -> "☰  אפשרויות"
+            Page.HOME -> "קיצורים"
+            Page.MANAGE, Page.REORDER -> "שמירה"
+            else -> "אפשרויות"
         }
-        val right = if (page == Page.HOME) "♙  אנשי קשר" else "‹  אחורה"
+        val right = if (page == Page.HOME) "אנשי קשר" else "אחורה"
         val leftBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; layoutDirection = View.LAYOUT_DIRECTION_LTR }
-        if (page == Page.HOME) leftBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.shortcuts); contentDescription = "קיצורים" }, LinearLayout.LayoutParams(dp(24), dp(24)))
-        leftBox.addView(label(left, 13, WHITE, true).apply { gravity = Gravity.CENTER_VERTICAL; contentDescription = "מקש שמאל: $left" }, LinearLayout.LayoutParams(-2, -1))
+        if (page == Page.HOME) leftBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_shortcuts); contentDescription = "קיצורים" }, LinearLayout.LayoutParams(dp(24), dp(24)))
+        if (page != Page.HOME) leftBox.addView(label(left, 13, WHITE, true).apply { gravity = Gravity.CENTER_VERTICAL; contentDescription = "מקש שמאל: $left" }, LinearLayout.LayoutParams(-2, -1))
         addView(leftBox, LinearLayout.LayoutParams(0, -1, 1f))
         val rightBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; layoutDirection = View.LAYOUT_DIRECTION_LTR }
-        if (page == Page.HOME) rightBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.contacts); contentDescription = "אנשי קשר" }, LinearLayout.LayoutParams(dp(22), dp(22)))
-        rightBox.addView(label(right, 13, WHITE, true).apply { gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; contentDescription = right }, LinearLayout.LayoutParams(-2, -1))
+        if (page == Page.HOME) rightBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_contacts); contentDescription = "אנשי קשר" }, LinearLayout.LayoutParams(dp(22), dp(22)))
+        if (page != Page.HOME) rightBox.addView(label(right, 13, WHITE, true).apply { gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; contentDescription = right }, LinearLayout.LayoutParams(-2, -1))
         addView(rightBox, LinearLayout.LayoutParams(0, -1, 1f))
     }
 
