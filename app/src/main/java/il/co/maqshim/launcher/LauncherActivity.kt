@@ -7,6 +7,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
+import android.bluetooth.BluetoothAdapter
+import android.net.wifi.WifiManager
+import android.telephony.PhoneStateListener
+import android.telephony.SignalStrength
 import android.graphics.Color
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -62,7 +66,7 @@ class LauncherActivity : ComponentActivity() {
     private val clockTick = object : Runnable {
         override fun run() {
             if (page == Page.HOME) render()
-            handler.postDelayed(this, 30_000L)
+            handler.postDelayed(this, 5_000L)
         }
     }
 
@@ -148,12 +152,12 @@ class LauncherActivity : ComponentActivity() {
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(9), 0, dp(9), 0)
         setBackgroundColor(0xFF030405.toInt())
-        val brand = label("NOKIA", 11, YELLOW, true).apply { gravity = Gravity.CENTER_VERTICAL }
-        addView(brand, LinearLayout.LayoutParams(dp(54), -1))
-        addView(View(this@LauncherActivity), LinearLayout.LayoutParams(0, 1, 1f))
-        addView(statusGlyph("signal"), LinearLayout.LayoutParams(dp(19), dp(17)))
+        val brand = statusGlyph("signal")
+        addView(brand, LinearLayout.LayoutParams(dp(19), dp(17)))
         addView(statusGlyph("wifi"), LinearLayout.LayoutParams(dp(19), dp(17)))
         addView(statusGlyph("bluetooth"), LinearLayout.LayoutParams(dp(17), dp(17)))
+        addView(View(this@LauncherActivity), LinearLayout.LayoutParams(0, 1, 1f))
+        // Bluetooth indicator is placed on the left
         addView(statusGlyph("battery"), LinearLayout.LayoutParams(dp(23), dp(17)))
         addView(label(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()), 12, WHITE, true), LinearLayout.LayoutParams(dp(46), -2))
     }
@@ -190,7 +194,7 @@ class LauncherActivity : ComponentActivity() {
         simRow.addView(simText, LinearLayout.LayoutParams(-2, dp(36)))
         content.addView(simRow, LinearLayout.LayoutParams(-1, dp(44)))
         content.addView(View(this), LinearLayout.LayoutParams(1, 0, 0.72f))
-        if (simLabel == "הרשאה נדרשת לשם המפעיל" && !permissionPrompted) {
+        if ((ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED || (Build.VERSION.SDK_INT >= 31 && BluetoothAdapter.getDefaultAdapter() != null && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)) && !permissionPrompted) {
             permissionPrompted = true
             content.post { if (page == Page.HOME) requestPhonePermission() }
         }
@@ -231,7 +235,7 @@ class LauncherActivity : ComponentActivity() {
         val cellHeight = ((resources.displayMetrics.heightPixels / resources.displayMetrics.density - 27f - 43f - 27f - 20f) / 3f)
             .toInt().coerceIn(84, 124)
         apps.forEachIndexed { index, app ->
-            val cell = appCell(app, index == selected, index, (cellHeight * .44f).toInt().coerceIn(32, 50))
+            val cell = appCell(app, index == selected, index, (cellHeight * .50f).toInt().coerceIn(36, 56))
             grid.addView(cell, GridLayout.LayoutParams().apply {
                 width = 0; height = dp(cellHeight)
                 columnSpec = GridLayout.spec(index % 3, 1, 1f)
@@ -251,7 +255,7 @@ class LauncherActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(dp(3), dp(5), dp(3), dp(4))
-            background = android.graphics.drawable.GradientDrawable().apply { setColor(if (isSelected) YELLOW else 0xFF141719.toInt()); cornerRadius = dp(if (isSelected) 18 else 4).toFloat() }
+            background = android.graphics.drawable.GradientDrawable().apply { setColor(if (isSelected) YELLOW else 0xFF141719.toInt()); cornerRadius = dp(29).toFloat() }
             contentDescription = "${app.label}${if (isSelected) ", נבחר" else ""}"
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
@@ -328,12 +332,12 @@ class LauncherActivity : ComponentActivity() {
         }
         val right = if (page == Page.HOME) "אנשי קשר" else "אחורה"
         val leftBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; layoutDirection = View.LAYOUT_DIRECTION_LTR }
-        if (page == Page.HOME) leftBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_shortcuts); contentDescription = "קיצורים" }, LinearLayout.LayoutParams(dp(24), dp(24)))
-        if (page != Page.HOME) leftBox.addView(label(left, 13, WHITE, true).apply { gravity = Gravity.CENTER_VERTICAL; contentDescription = "מקש שמאל: $left" }, LinearLayout.LayoutParams(-2, -1))
+        if (page == Page.HOME) leftBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_shortcuts); contentDescription = "קיצורים" }, LinearLayout.LayoutParams(dp(29), dp(29)))
+        if (page != Page.HOME) leftBox.addView(if (page == Page.MANAGE || page == Page.REORDER) label(left, 13, WHITE, true).apply { contentDescription = "מקש שמאל: $left" } else ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_options); contentDescription = "אפשרויות"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(29), dp(29)))
         addView(leftBox, LinearLayout.LayoutParams(0, -1, 1f))
         val rightBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; layoutDirection = View.LAYOUT_DIRECTION_LTR }
-        if (page == Page.HOME) rightBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_contacts); contentDescription = "אנשי קשר" }, LinearLayout.LayoutParams(dp(22), dp(22)))
-        if (page != Page.HOME) rightBox.addView(label(right, 13, WHITE, true).apply { gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; contentDescription = right }, LinearLayout.LayoutParams(-2, -1))
+        if (page == Page.HOME) rightBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_contacts); contentDescription = "אנשי קשר" }, LinearLayout.LayoutParams(dp(27), dp(27)))
+        if (page != Page.HOME) rightBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_back); contentDescription = "אחורה"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(29), dp(29)))
         addView(rightBox, LinearLayout.LayoutParams(0, -1, 1f))
     }
 
@@ -417,13 +421,13 @@ class LauncherActivity : ComponentActivity() {
     }
 
     private fun requestPhonePermission() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) { render(); return }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED && (Build.VERSION.SDK_INT < 31 || BluetoothAdapter.getDefaultAdapter() == null || ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED)) { render(); return }
         AlertDialog.Builder(this)
-            .setTitle("הרשאת פרטי SIM")
-            .setMessage("ההרשאה נדרשת רק להצגת שם חברת התקשורת בשורת הבית. אפשר להמשיך להשתמש במקשים גם בלי לאשר.")
+            .setTitle("הרשאות לשורת המצב")
+            .setMessage("ההרשאות נדרשות להצגת קליטה סלולרית, פרטי SIM ומצב Bluetooth. אפשר להמשיך להשתמש במקשים גם בלי לאשר.")
             .setNegativeButton("לא עכשיו") { _, _ -> render() }
             .setPositiveButton("המשך") { _, _ ->
-        requestPermissions(arrayOf(Manifest.permission.READ_PHONE_STATE), 41)
+        requestPermissions(if (Build.VERSION.SDK_INT >= 31 && BluetoothAdapter.getDefaultAdapter() != null) arrayOf(Manifest.permission.READ_PHONE_STATE, Manifest.permission.BLUETOOTH_CONNECT) else arrayOf(Manifest.permission.READ_PHONE_STATE), 41)
             }.show().also { it.window?.decorView?.layoutDirection = View.LAYOUT_DIRECTION_RTL }
     }
 
@@ -431,8 +435,8 @@ class LauncherActivity : ComponentActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 41) {
-            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) toast("שם המפעיל יוצג במסך הבית")
-            else toast("ההרשאה נדחתה; פרטי המפעיל לא יוצגו")
+            if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) toast("נתוני מצב הרשת יוצגו בשורת הבית")
+            else toast("הרשאה נדחתה; החיווי המתאים יוצג כלא זמין")
             render()
         }
     }
@@ -536,21 +540,21 @@ private class NokiaStatusGlyph(context: android.content.Context, private val kin
         when (kind) {
             "signal" -> for (i in 0..3) {
                 val bh = sy * (.32f + .2f * i)
-                fill.color = if (i < 3) Color.WHITE else 0x66FFFFFF
+                fill.color = if (i < (try { if (Build.VERSION.SDK_INT >= 28) ((context.getSystemService(android.content.Context.TELEPHONY_SERVICE) as? TelephonyManager)?.signalStrength?.level ?: 0) else 0 } catch (_: Exception) { 0 })) Color.WHITE else 0x667F8588
                 canvas.drawRoundRect(RectF(sx * (.08f + i * .23f), sy * .92f - bh, sx * (.24f + i * .23f), sy * .92f), sx * .06f, sx * .06f, fill)
             }
             "wifi" -> {
                 val cx = sx * .5f; val cy = sy * .88f
                 for (k in 0..2) {
-                    stroke.color = if (k < 2) Color.WHITE else 0x66FFFFFF
+                    stroke.color = if (k < (try { val wm = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? WifiManager; val info = wm?.connectionInfo; if (wm?.isWifiEnabled == true && info != null && info.networkId != -1) { val lvl = WifiManager.calculateSignalLevel(info.rssi, 5); if (lvl >= 4) 3 else if (lvl >= 2) 2 else if (lvl >= 1) 1 else 0 } else 0 } catch (_: Exception) { 0 })) Color.WHITE else 0x667F8588
                     val r = sx * (.26f + .2f * k)
                     canvas.drawArc(RectF(cx-r, cy-r, cx+r, cy+r), -135f, 90f, false, stroke)
                 }
-                fill.color = YELLOW
+                fill.color = if (runCatching { val wm = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? WifiManager; val info = wm?.connectionInfo; wm?.isWifiEnabled == true && info != null && info.networkId != -1 }.getOrDefault(false)) YELLOW else 0x667F8588
                 canvas.drawCircle(cx, cy, sx * .07f, fill)
             }
             "bluetooth" -> {
-                val p = Path().apply { moveTo(sx*.27f,sy*.30f); lineTo(sx*.73f,sy*.70f); lineTo(sx*.50f,sy*.90f); lineTo(sx*.50f,sy*.10f); lineTo(sx*.73f,sy*.30f); lineTo(sx*.27f,sy*.70f) }
+                stroke.color = if (runCatching { BluetoothAdapter.getDefaultAdapter()?.isEnabled == true }.getOrDefault(false)) Color.WHITE else 0x667F8588; val p = Path().apply { moveTo(sx*.27f,sy*.30f); lineTo(sx*.73f,sy*.70f); lineTo(sx*.50f,sy*.90f); lineTo(sx*.50f,sy*.10f); lineTo(sx*.73f,sy*.30f); lineTo(sx*.27f,sy*.70f) }
                 canvas.drawPath(p, stroke)
             }
             "battery" -> {
