@@ -259,7 +259,7 @@ class LauncherActivity : ComponentActivity() {
             contentDescription = "${app.label}${if (isSelected) ", נבחר" else ""}"
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
-        box.addView(ImageView(this).apply { setImageDrawable(app.icon); contentDescription = app.label }, LinearLayout.LayoutParams(dp(iconDp), dp(iconDp)))
+        box.addView(ImageView(this).apply { setImageDrawable(app.icon); contentDescription = app.label }, LinearLayout.LayoutParams(dp(iconDp), dp(iconDp))); box.setOnLongClickListener { showAppActions(app); true }
         box.addView(label(app.label, 12, if (isSelected) BLACK else WHITE).apply { gravity = Gravity.CENTER; maxLines = 2; textAlignment = View.TEXT_ALIGNMENT_CENTER; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, dp(4), 0, 0) }, LinearLayout.LayoutParams(-1, -2))
         return box
     }
@@ -282,7 +282,7 @@ class LauncherActivity : ComponentActivity() {
             row.addView(ImageView(this).apply { setImageDrawable(app.icon); contentDescription = app.label }, LinearLayout.LayoutParams(dp(34), dp(34)))
             row.addView(label(app.label, 15, if (i == selection) BLACK else WHITE).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(9), 0, 0, 0); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, -1, 1f))
             if (checks) row.addView(label(if (active) "✓" else "□", 20, if (i == selection) BLACK else YELLOW, true).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(36), -1))
-            list.addView(row, LinearLayout.LayoutParams(-1, dp(if (checks) 48 else 52)).apply { bottomMargin = dp(1) })
+            row.setOnLongClickListener { showAppActions(app); true }; list.addView(row, LinearLayout.LayoutParams(-1, dp(if (checks) 48 else 52)).apply { bottomMargin = dp(1) })
         }
         scroll.addView(list)
         wrapper.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -307,7 +307,7 @@ class LauncherActivity : ComponentActivity() {
         if (moving) centeredOverlay(frame, "בחר יעד בעזרת ↑↓\nאישור לשחרור")
     }
 
-    private var moving = false
+    private var moving = false; private var centerLongPressHandled = false
 
     private fun centeredOverlay(frame: FrameLayout, text: String) {
         val chip = label(text, 14, BLACK, true).apply { gravity = Gravity.CENTER; setPadding(dp(16), dp(10), dp(16), dp(10)); setBackgroundColor(YELLOW) }
@@ -407,7 +407,7 @@ class LauncherActivity : ComponentActivity() {
         catch (_: Exception) { toast("לא ניתן לפתוח את ${app.label}") }
     }
 
-    private fun openContacts() {
+    private fun showAppActions(app: LaunchableApp) { val actions = arrayOf("פרטי אפליקציה", "הסר אפליקציה"); AlertDialog.Builder(this).setTitle(app.label).setItems(actions) { _, which -> val action = if (which == 0) android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS else Intent.ACTION_DELETE; try { startActivity(Intent(action, Uri.parse("package:${app.packageName}"))) } catch (_: ActivityNotFoundException) { toast("הפעולה אינה זמינה") } catch (_: SecurityException) { toast("אין הרשאה לבצע פעולה זו") } catch (_: Exception) { toast("לא ניתן לפתוח את אפשרויות האפליקציה") } }.show().also { it.window?.decorView?.layoutDirection = View.LAYOUT_DIRECTION_RTL } }; private fun openContacts() {
         val intents = listOf(
             Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI),
             Intent(Intent.ACTION_MAIN).addCategory("android.intent.category.APP_CONTACTS")
@@ -518,12 +518,12 @@ class LauncherActivity : ComponentActivity() {
         return false
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+    override fun onKeyLongPress(keyCode: Int, event: KeyEvent?): Boolean { if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) { val currentApps = when (page) { Page.APPS, Page.MANAGE -> apps; Page.SHORTCUTS, Page.REORDER -> shortcuts.mapNotNull { id -> apps.find { it.packageName == id } }; else -> emptyList() }; val app = currentApps.getOrNull(selected); if (app != null) { centerLongPressHandled=true; showAppActions(app); return true } }; return super.onKeyLongPress(keyCode, event) }; override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean { if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) { if (event?.repeatCount == 0) { centerLongPressHandled=false; event?.startTracking() }; return true };
         if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) { goBack(); return true }
         return if (navigate(keyCode)) true else super.onKeyDown(keyCode, event)
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density + .5f).toInt()
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean { if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) { val wasLongPress = centerLongPressHandled || event?.isCanceled == true; centerLongPressHandled=false; if (!wasLongPress) navigate(keyCode); return true }; return super.onKeyUp(keyCode, event) }; private fun dp(value: Int): Int = (value * resources.displayMetrics.density + .5f).toInt()
 }
 
 /** Small Android Canvas port of the custom signal, Wi-Fi, Bluetooth and battery marks in NokiaMusic. */
