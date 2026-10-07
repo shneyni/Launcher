@@ -259,7 +259,7 @@ class LauncherActivity : ComponentActivity() {
             contentDescription = "${app.label}${if (isSelected) ", נבחר" else ""}"
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
-        box.addView(ImageView(this).apply { setImageDrawable(app.icon); contentDescription = app.label }, LinearLayout.LayoutParams(dp(iconDp), dp(iconDp))); box.setOnLongClickListener { showAppActions(app); true }
+        box.addView(ImageView(this).apply { setImageDrawable(app.icon); contentDescription = app.label }, LinearLayout.LayoutParams(dp(iconDp), dp(iconDp)))
         box.addView(label(app.label, 12, if (isSelected) BLACK else WHITE).apply { gravity = Gravity.CENTER; maxLines = 2; textAlignment = View.TEXT_ALIGNMENT_CENTER; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, dp(4), 0, 0) }, LinearLayout.LayoutParams(-1, -2))
         return box
     }
@@ -282,7 +282,7 @@ class LauncherActivity : ComponentActivity() {
             row.addView(ImageView(this).apply { setImageDrawable(app.icon); contentDescription = app.label }, LinearLayout.LayoutParams(dp(34), dp(34)))
             row.addView(label(app.label, 15, if (i == selection) BLACK else WHITE).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(9), 0, 0, 0); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, -1, 1f))
             if (checks) row.addView(label(if (active) "✓" else "□", 20, if (i == selection) BLACK else YELLOW, true).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(36), -1))
-            row.setOnLongClickListener { showAppActions(app); true }; list.addView(row, LinearLayout.LayoutParams(-1, dp(if (checks) 48 else 52)).apply { bottomMargin = dp(1) })
+            list.addView(row, LinearLayout.LayoutParams(-1, dp(if (checks) 48 else 52)).apply { bottomMargin = dp(1) })
         }
         scroll.addView(list)
         wrapper.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
