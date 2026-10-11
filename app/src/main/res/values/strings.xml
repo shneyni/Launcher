@@ -1,0 +1,5 @@
+<resources>
+    <string name="a11y_label">Launcher – מקשים</string>
+    <string name="a11y_desc">מאפשר ללחוץ על # בכל מקום כדי להחליף בין צליל, רטט ושקט, ולפתוח את תפריט ההפעלה בלחיצה ארוכה על מקש ההפעלה. השירות אינו קורא או שומר תוכן מהמסך.</string>
+    <string name="notif_label">Launcher – התראות</string>
+</resources>
