@@ -188,9 +188,7 @@ class LockActivity : NoTouchActivity() {
         return null
     }
 
-    override fun onDestroy() {
-        if (current === this) current = null
-        super.onDestroy()
+  
     }
 
     private fun isLeftKey(code: Int) = code == KeyEvent.KEYCODE_SOFT_LEFT || code == KeyEvent.KEYCODE_MENU
