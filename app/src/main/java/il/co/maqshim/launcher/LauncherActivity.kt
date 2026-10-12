@@ -3,6 +3,7 @@ package il.co.maqshim.launcher
 import android.Manifest
 import android.app.ActivityOptions
 import android.app.role.RoleManager
+import android.provider.CallLog
 import android.provider.ContactsContract
 import android.telecom.TelecomManager
 import android.app.PendingIntent
@@ -33,6 +34,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.ContactsContract
 import android.telephony.TelephonyManager
 import android.view.Gravity
 import android.view.KeyEvent
@@ -58,7 +60,7 @@ private const val GRAY = 0xFFA6A6A6.toInt()
 private const val WHITE = 0xFFF5F5F5.toInt()
 
 private data class LaunchableApp(val packageName: String, val label: String, val icon: Drawable)
-private enum class Page { HOME, SHORTCUTS, APPS, MANAGE, REORDER, DIAL }
+private enum class Page { HOME, SHORTCUTS, APPS, MANAGE, REORDER, DIAL, HISTORY }
 private class ContactEntry(val name: String, val number: String, val digits: String, val wordCodes: List<String>, val fullCode: String)
 private class MenuState(val title: String, val items: List<Pair<String, () -> Unit>>, var index: Int = 0)
 
@@ -83,6 +85,7 @@ class LauncherActivity : NoTouchActivity() {
     private var contactsLoadedAt = 0L
     private var contactsPrompted = false
     private var pendingCall: String? = null
+    private var historyRows: List<Pair<String, String>> = emptyList()
     private var cardsView: CardsView? = null
     private val hubListener = Runnable { refreshCards() }
     private val progressTick = object : Runnable {
@@ -245,6 +248,7 @@ class LauncherActivity : NoTouchActivity() {
             Page.MANAGE -> renderManage(body)
             Page.REORDER -> renderReorder(body)
             Page.DIAL -> renderDial(body)
+            Page.HISTORY -> renderHistory(body)
         }
         menu?.let { menuOverlay(body, it) }
         root.addView(softKeys(), LinearLayout.LayoutParams(-1, dp(43)))
@@ -262,21 +266,7 @@ class LauncherActivity : NoTouchActivity() {
         body.addView(View(this).apply { setBackgroundColor(if (closeUp) 0xA6000000.toInt() else 0x59000000) }, FrameLayout.LayoutParams(-1, -1))
     }
 
-    private fun statusBar(): View = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
-        layoutDirection = View.LAYOUT_DIRECTION_LTR
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(9), 0, dp(9), 0)
-        setBackgroundColor(0xFF030405.toInt())
-        val brand = statusGlyph("signal")
-        addView(brand, LinearLayout.LayoutParams(dp(19), dp(17)))
-        addView(statusGlyph("wifi"), LinearLayout.LayoutParams(dp(19), dp(17)))
-        addView(statusGlyph("bluetooth"), LinearLayout.LayoutParams(dp(17), dp(17)))
-        addView(View(this@LauncherActivity), LinearLayout.LayoutParams(0, 1, 1f))
-        // Bluetooth indicator is placed on the left
-        addView(statusGlyph("battery"), LinearLayout.LayoutParams(dp(23), dp(17)))
-        addView(label(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()), 12, WHITE, true), LinearLayout.LayoutParams(dp(46), -2))
-    }
+    private fun statusBar(): View = StatusBarView(this)
 
     private fun renderHome(frame: FrameLayout) {
         val content = LinearLayout(this).apply {
@@ -496,13 +486,13 @@ class LauncherActivity : NoTouchActivity() {
         val left = when (page) {
             Page.HOME -> "קיצורים"
             Page.MANAGE, Page.REORDER -> "שמירה"
-            Page.DIAL -> "חייג"
+            Page.DIAL, Page.HISTORY -> "חייג"
             else -> "אפשרויות"
         }
         val right = if (page == Page.HOME) "אנשי קשר" else "אחורה"
         val leftBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; layoutDirection = View.LAYOUT_DIRECTION_LTR }
         if (page == Page.HOME) leftBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_shortcuts); contentDescription = "קיצורים" }, LinearLayout.LayoutParams(dp(29), dp(29)))
-        if (page != Page.HOME) leftBox.addView(if (page == Page.MANAGE || page == Page.REORDER || page == Page.DIAL) label(left, 13, WHITE, true).apply { contentDescription = "מקש שמאל: $left" } else ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_options); contentDescription = "אפשרויות"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(34), dp(34)))
+        if (page != Page.HOME) leftBox.addView(if (page == Page.MANAGE || page == Page.REORDER || page == Page.DIAL || page == Page.HISTORY) label(left, 13, WHITE, true).apply { contentDescription = "מקש שמאל: $left" } else ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_options); contentDescription = "אפשרויות"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(34), dp(34)))
         addView(leftBox, LinearLayout.LayoutParams(0, -1, 1f))
         val rightBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; layoutDirection = View.LAYOUT_DIRECTION_LTR }
         if (page == Page.HOME) rightBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_contacts); contentDescription = "אנשי קשר" }, LinearLayout.LayoutParams(dp(27), dp(27)))
@@ -734,6 +724,11 @@ class LauncherActivity : NoTouchActivity() {
     @Deprecated("Permission result callback")
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 45) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED) openHistory()
+            else toast("בלי הרשאה אי אפשר להציג היסטוריית שיחות")
+            return
+        }
         if (requestCode == 43) {
             contactsLoadedAt = 0L
             val callGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
@@ -762,6 +757,7 @@ class LauncherActivity : NoTouchActivity() {
             Page.MANAGE -> { page = returnPage; render() }
             Page.REORDER -> { moving = false; page = returnPage; render() }
             Page.DIAL -> dialBack()
+            Page.HISTORY -> { page = Page.HOME; selected = 0; render() }
         }
     }
 
@@ -798,6 +794,16 @@ class LauncherActivity : NoTouchActivity() {
                 KeyEvent.KEYCODE_DPAD_LEFT -> { if (focusedCard() == CardsView.Kind.MEDIA) NotificationHub.skip(false); return true }
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { if (focusedCard() == CardsView.Kind.MEDIA) NotificationHub.skip(true); return true }
                 KeyEvent.KEYCODE_SOFT_RIGHT -> { openContacts(); return true }
+            }
+            Page.HISTORY -> when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> { selectRow(selected - 1); return true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> { selectRow(selected + 1); return true }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_CALL, KeyEvent.KEYCODE_SOFT_LEFT -> {
+                    val number = historyRows.getOrNull(selected)?.second.orEmpty()
+                    if (number.isBlank()) toast("מספר חסוי") else callNumber(number)
+                    return true
+                }
+                KeyEvent.KEYCODE_SOFT_RIGHT -> { goBack(); return true }
             }
             Page.DIAL -> when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP -> { selectRow(selected - 1); return true }
@@ -1015,6 +1021,77 @@ class LauncherActivity : NoTouchActivity() {
         catch (_: Exception) { toast("לא ניתן לחייג") }
     }
 
+    private fun openHistory() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CONTACTS), 45)
+            return
+        }
+        historyRows = loadHistory()
+        selected = 0
+        page = Page.HISTORY
+        render()
+    }
+
+    /** Recent calls from the device call log: text to show, and the number to call back. */
+    private fun loadHistory(): List<Pair<String, String>> {
+        val out = mutableListOf<Pair<String, String>>()
+        try {
+            val format = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
+            contentResolver.query(
+                CallLog.Calls.CONTENT_URI,
+                arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.CACHED_NAME, CallLog.Calls.TYPE, CallLog.Calls.DATE),
+                null, null, CallLog.Calls.DATE + " DESC"
+            )?.use { c ->
+                while (c.moveToNext() && out.size < 60) {
+                    val number = c.getString(0).orEmpty()
+                    val name = c.getString(1)
+                    val who = if (!name.isNullOrBlank()) name else if (number.isBlank()) "מספר חסוי" else number
+                    val mark = when (c.getInt(2)) {
+                        CallLog.Calls.INCOMING_TYPE -> "↙"
+                        CallLog.Calls.OUTGOING_TYPE -> "↗"
+                        CallLog.Calls.MISSED_TYPE, CallLog.Calls.REJECTED_TYPE -> "✗"
+                        else -> "•"
+                    }
+                    out.add("$mark $who · ${format.format(Date(c.getLong(3)))}" to number)
+                }
+            }
+        } catch (_: Exception) { }
+        return out
+    }
+
+    private fun renderHistory(frame: FrameLayout) {
+        val wrapper = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(6), dp(12), dp(4)) }
+        wrapper.addView(label("היסטוריית שיחות", 16, YELLOW, true).apply { gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT }, LinearLayout.LayoutParams(-1, dp(32)))
+        wrapper.addView(View(this).apply { setBackgroundColor(YELLOW) }, LinearLayout.LayoutParams(-1, dp(2)).apply { bottomMargin = dp(6) })
+        listRows.clear()
+        val scroll = ScrollView(this).apply { isFillViewport = false; overScrollMode = View.OVER_SCROLL_NEVER }
+        listScroll = scroll
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        if (historyRows.isEmpty()) {
+            list.addView(label("אין שיחות", 16, GRAY).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, dp(80)))
+        }
+        historyRows.forEachIndexed { i, entry ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutDirection = View.LAYOUT_DIRECTION_RTL
+                setPadding(dp(7), 0, dp(7), 0)
+                setBackgroundColor(if (i == selected) YELLOW else if (i % 2 == 0) 0xFF101315.toInt() else BLACK)
+            }
+            row.addView(View(this), LinearLayout.LayoutParams(dp(4), 1))
+            row.addView(label(entry.first, 15, if (i == selected) BLACK else WHITE).apply {
+                gravity = Gravity.CENTER_VERTICAL; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(9), 0, 0, 0)
+            }, LinearLayout.LayoutParams(0, -1, 1f))
+            listRows.add(row)
+            list.addView(row, LinearLayout.LayoutParams(-1, dp(46)).apply { bottomMargin = dp(1) })
+        }
+        scroll.addView(list)
+        wrapper.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        wrapper.addView(label("חייג או אישור: התקשרות · אחורה: חזרה", 11, GRAY).apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, 0) }, LinearLayout.LayoutParams(-1, dp(24)))
+        frame.addView(wrapper, FrameLayout.LayoutParams(-1, -1))
+        scroll.post { list.getChildAt(selected)?.let { scroll.scrollTo(0, it.top) } }
+    }
+
     private fun renderDial(frame: FrameLayout) {
         val wrapper = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(6), dp(12), dp(4)) }
         wrapper.addView(label(dialInput.toString().ifEmpty { " " }, 32, WHITE, true).apply {
@@ -1132,6 +1209,10 @@ class LauncherActivity : NoTouchActivity() {
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) { goBack(); return true }
+        if (keyCode == KeyEvent.KEYCODE_CALL && menu == null && page == Page.HOME) {
+            if (repeat == 0) openHistory()      // green call key with nothing typed: call history
+            return true
+        }
         if (menu == null && (page == Page.HOME || page == Page.DIAL)) {
             if (keyCode == KeyEvent.KEYCODE_POUND) return true      // typed when the key is released
             val c = dialChar(keyCode)

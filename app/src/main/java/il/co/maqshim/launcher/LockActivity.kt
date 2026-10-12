@@ -105,6 +105,7 @@ class LockActivity : NoTouchActivity() {
         column.addView(cards, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(3) })
         root.addView(column, FrameLayout.LayoutParams(-1, -1))
         statusHolder = FrameLayout(this)
+        statusHolder.addView(StatusBarView(this), FrameLayout.LayoutParams(-1, -1))
         root.addView(statusHolder, FrameLayout.LayoutParams(-1, dp(27), Gravity.TOP))
 
         val bar = LinearLayout(this).apply {
@@ -154,12 +155,11 @@ class LockActivity : NoTouchActivity() {
     }
 
     private fun updateTexts() {
-        statusHolder.removeAllViews()
-        statusHolder.addView(createStatusBar(this), FrameLayout.LayoutParams(-1, -1))
         val now = LocalDate.now()
         timeView.text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
         val weekday = SimpleDateFormat("EEEE", Locale("he", "IL")).format(Date())
-        dateView.text = "$weekday  ${now.format(java.time.format.DateTimeFormatter.ofPattern("dd-MM-yyyy"))}"
+        val dateText = SimpleDateFormat("dd-MM-yyyy", Locale.getDefault()).format(Date())
+        dateView.text = "$weekday  $dateText"
         hebrewView.text = now.toHebrewDateString()
     }
 
@@ -188,10 +188,9 @@ class LockActivity : NoTouchActivity() {
         return null
     }
 
-  
+    private fun isLeftKey(code: Int): Boolean {
+        return code == KeyEvent.KEYCODE_SOFT_LEFT || code == KeyEvent.KEYCODE_MENU
     }
-
-    private fun isLeftKey(code: Int) = code == KeyEvent.KEYCODE_SOFT_LEFT || code == KeyEvent.KEYCODE_MENU
 
     // Caught before any view gets the key, so the system keyguard cannot swallow it.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

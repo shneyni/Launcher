@@ -55,6 +55,7 @@ class CallActivity : NoTouchActivity() {
 
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xFF080A0C.toInt()) }
         statusHolder = FrameLayout(this)
+        statusHolder.addView(StatusBarView(this), FrameLayout.LayoutParams(-1, -1))
         root.addView(statusHolder, LinearLayout.LayoutParams(-1, dp(27)))
 
         val content = LinearLayout(this).apply {
@@ -118,8 +119,6 @@ class CallActivity : NoTouchActivity() {
     private fun muted() = CallManager.audioState?.isMuted == true
 
     private fun refresh() {
-        statusHolder.removeAllViews()
-        statusHolder.addView(createStatusBar(this), FrameLayout.LayoutParams(-1, -1))
         val call = CallManager.primary()
         if (call == null) {
             updateProximity(false)
