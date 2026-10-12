@@ -74,7 +74,6 @@ class LauncherActivity : NoTouchActivity() {
     private var appsDirty = true
     private var arranging = false
     private var grabbed = false
-    private var softLeftLong = false
     private var historyFrom = Page.HOME
     private val wallpaperReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -336,8 +335,8 @@ class LauncherActivity : NoTouchActivity() {
         content.addView(rule, ruleParams)
         val weekday = SimpleDateFormat("EEEE", Locale("he", "IL")).format(Date())
         val civilDate = "$weekday  ${now.format(java.time.format.DateTimeFormatter.ofPattern("dd-MM-yyyy"))}"
-        content.addView(label(civilDate, 15, WHITE).apply { gravity = Gravity.RIGHT }, LinearLayout.LayoutParams(-1, -2))
-        content.addView(label(now.toHebrewDateString(), 15, GRAY).apply { gravity = Gravity.RIGHT; setPadding(0, dp(4), 0, 0) }, LinearLayout.LayoutParams(-1, -2))
+        content.addView(label(civilDate, 15, 0xFFCFCFCF.toInt()).apply { gravity = Gravity.RIGHT }, LinearLayout.LayoutParams(-1, -2))
+        content.addView(label(now.toHebrewDateString(), 15, 0xFFFFFFFF.toInt()).apply { gravity = Gravity.RIGHT; setPadding(0, dp(4), 0, 0) }, LinearLayout.LayoutParams(-1, -2))
         content.addView(View(this), LinearLayout.LayoutParams(1, 0, 0.58f))
         val simRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; layoutDirection = View.LAYOUT_DIRECTION_RTL }
         val simLabel = simStatus()
@@ -530,14 +529,14 @@ class LauncherActivity : NoTouchActivity() {
         val left = when (page) {
             Page.HOME -> "קיצורים"
             Page.MANAGE, Page.REORDER -> "שמירה"
-            Page.DIAL, Page.HISTORY -> "חייג"
+            Page.HISTORY -> "חייג"
             Page.APPS -> if (arranging) "סיום" else "אפשרויות"
             else -> "אפשרויות"
         }
         val right = if (page == Page.HOME) "אנשי קשר" else "אחורה"
         val leftBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; layoutDirection = View.LAYOUT_DIRECTION_LTR }
         if (page == Page.HOME) leftBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_shortcuts); contentDescription = "קיצורים" }, LinearLayout.LayoutParams(dp(29), dp(29)))
-        if (page != Page.HOME) leftBox.addView(if (page == Page.MANAGE || page == Page.REORDER || page == Page.DIAL || page == Page.HISTORY || (page == Page.APPS && arranging)) label(left, 13, WHITE, true).apply { contentDescription = "מקש שמאל: $left" } else ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_options); contentDescription = "אפשרויות"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(34), dp(34)))
+        if (page != Page.HOME) leftBox.addView(if (page == Page.MANAGE || page == Page.REORDER || page == Page.HISTORY || (page == Page.APPS && arranging)) label(left, 13, WHITE, true).apply { contentDescription = "מקש שמאל: $left" } else ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_options); contentDescription = "אפשרויות"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(34), dp(34)))
         addView(leftBox, LinearLayout.LayoutParams(0, -1, 1f))
         val rightBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; layoutDirection = View.LAYOUT_DIRECTION_LTR }
         if (page == Page.HOME) rightBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_contacts); contentDescription = "אנשי קשר" }, LinearLayout.LayoutParams(dp(27), dp(27)))
@@ -859,10 +858,11 @@ class LauncherActivity : NoTouchActivity() {
             Page.DIAL -> when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP -> { selectRow(selected - 1); return true }
                 KeyEvent.KEYCODE_DPAD_DOWN -> { selectRow(selected + 1); return true }
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_CALL, KeyEvent.KEYCODE_SOFT_LEFT -> {
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_CALL -> {
                     dialRows.getOrNull(selected)?.let { callNumber(it.second) }
                     return true
                 }
+                KeyEvent.KEYCODE_SOFT_LEFT -> { showDialOptions(); return true }
                 KeyEvent.KEYCODE_SOFT_RIGHT -> { dialBack(); return true }
             }
             Page.SHORTCUTS -> {
@@ -897,6 +897,7 @@ class LauncherActivity : NoTouchActivity() {
                         KeyEvent.KEYCODE_DPAD_LEFT -> { if (last >= 0) selectApp((selected + 1).coerceAtMost(last)); return true }
                         KeyEvent.KEYCODE_DPAD_RIGHT -> { if (last >= 0) selectApp((selected - 1).coerceAtLeast(0)); return true }
                         KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { openSelected(apps); return true }
+                        KeyEvent.KEYCODE_SOFT_LEFT -> { enterArrange(); return true }   // arrange mode
                     }
                 }
             }
@@ -1087,6 +1088,23 @@ class LauncherActivity : NoTouchActivity() {
         catch (_: Exception) { toast("לא ניתן לחייג") }
     }
 
+    /** Left key on the dialer: more options for the typed number (or the highlighted contact). */
+    private fun showDialOptions() {
+        val number = dialRows.getOrNull(selected)?.second ?: dialInput.toString()
+        val items = mutableListOf<Pair<String, () -> Unit>>()
+        if (number.isNotBlank()) {
+            items.add(item("שמירה באנשי קשר") {
+                startQuiet(Intent(ContactsContract.Intents.Insert.ACTION).setType(ContactsContract.RawContacts.CONTENT_TYPE)
+                    .putExtra(ContactsContract.Intents.Insert.PHONE, number), "לא ניתן לפתוח את אנשי הקשר")
+            })
+            items.add(item("שליחת הודעה") {
+                startQuiet(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(number))), "לא ניתן לפתוח הודעות")
+            })
+        }
+        items.add(item("ניקוי המספר") { clearDial() })
+        openMenu("אפשרויות", items)
+    }
+
     private fun openHistory() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_CONTACTS), 45)
@@ -1190,7 +1208,7 @@ class LauncherActivity : NoTouchActivity() {
         scroll.addView(list)
         wrapper.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         val noContacts = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED
-        val hint = if (noContacts) "אשר גישה לאנשי קשר כדי לחפש לפי שם" else "↑↓ בחירה · חייג או אישור להתקשרות · אחורה מוחק"
+        val hint = if (noContacts) "אשר גישה לאנשי קשר כדי לחפש לפי שם" else "↑↓ בחירה · חייג או אישור: התקשרות · אחורה: מחיקה"
         wrapper.addView(label(hint, 11, GRAY).apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, 0) }, LinearLayout.LayoutParams(-1, dp(24)))
         frame.addView(wrapper, FrameLayout.LayoutParams(-1, -1))
         scroll.post { list.getChildAt(selected)?.let { scroll.scrollTo(0, it.top) } }
@@ -1269,11 +1287,6 @@ class LauncherActivity : NoTouchActivity() {
     override fun onKeyLongPress(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) { longPressCenter(); return true }
         if (keyCode == KeyEvent.KEYCODE_0 && page == Page.DIAL) { dialPlus(); return true }
-        if (keyCode == KeyEvent.KEYCODE_SOFT_LEFT && page == Page.APPS && !arranging && menu == null) {
-            softLeftLong = true      // long press on the left key: the old options menu (manage apps, system settings)
-            showOptions()
-            return true
-        }
         if (keyCode == KeyEvent.KEYCODE_POWER) {
             try { startActivity(Intent(this, PowerMenuActivity::class.java), noAnimation()) } catch (_: Exception) { }
             return true
@@ -1295,11 +1308,6 @@ class LauncherActivity : NoTouchActivity() {
         }
         if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) { goBack(); return true }
         if (keyCode == KeyEvent.KEYCODE_ENDCALL && endKeyBack()) return true
-        if (keyCode == KeyEvent.KEYCODE_SOFT_LEFT && page == Page.APPS && !arranging && menu == null) {
-            if (repeat == 0) { softLeftLong = false; event?.startTracking() }
-            else if (repeat == 1 && !softLeftLong) { softLeftLong = true; showOptions() }
-            return true
-        }
         if (keyCode == KeyEvent.KEYCODE_CALL && menu == null && page == Page.HOME) {
             if (repeat == 0) openHistory()      // green call key with nothing typed: call history
             return true
@@ -1318,12 +1326,6 @@ class LauncherActivity : NoTouchActivity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_SOFT_LEFT && page == Page.APPS && !arranging && menu == null) {
-            val wasLong = softLeftLong || event?.isCanceled == true
-            softLeftLong = false
-            if (!wasLong) enterArrange()      // short press: arrange mode
-            return true
-        }
         if (keyCode == KeyEvent.KEYCODE_POUND && menu == null && (page == Page.HOME || page == Page.DIAL)) {
             dialAppend('#')
             return true

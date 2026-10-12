@@ -87,8 +87,8 @@ class LockActivity : NoTouchActivity() {
             layoutDirection = View.LAYOUT_DIRECTION_RTL
         }
         timeView = text(55, 0xFFF5F5F5.toInt(), true)
-        dateView = text(15, 0xFFF5F5F5.toInt(), false)
-        hebrewView = text(15, 0xFFD0D0D0.toInt(), false).apply { setPadding(0, dp(4), 0, 0) }
+        dateView = text(15, 0xFFCFCFCF.toInt(), false)
+        hebrewView = text(15, 0xFFFFFFFF.toInt(), false).apply { setPadding(0, dp(4), 0, 0) }
         content.addView(timeView, LinearLayout.LayoutParams(-1, -2))
         content.addView(View(this).apply { setBackgroundColor(0xFFFDC100.toInt()) },
             LinearLayout.LayoutParams((resources.displayMetrics.widthPixels * .72f).toInt(), dp(2)).apply {

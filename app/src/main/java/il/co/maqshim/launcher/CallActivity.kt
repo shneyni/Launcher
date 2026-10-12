@@ -363,7 +363,8 @@ class CallActivity : NoTouchActivity() {
         if (!isFinishing) refresh()
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    @Deprecated("Permission result callback")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 61 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) startRecording()
     }
@@ -415,6 +416,19 @@ class CallActivity : NoTouchActivity() {
             KeyEvent.KEYCODE_BACK -> { if (repeat == 0 && call?.state == Call.STATE_RINGING) hangUp(); return true }
             KeyEvent.KEYCODE_SOFT_LEFT -> { if (repeat == 0 && call != null && call.state != Call.STATE_RINGING) openMenu(); return true }
             KeyEvent.KEYCODE_SOFT_RIGHT -> { if (repeat == 0) toggleSpeaker(); return true }
+            // Up / down change the call volume
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (call != null && call.state != Call.STATE_RINGING) {
+                    try {
+                        (getSystemService(Context.AUDIO_SERVICE) as AudioManager).adjustStreamVolume(
+                            AudioManager.STREAM_VOICE_CALL,
+                            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
+                            AudioManager.FLAG_SHOW_UI
+                        )
+                    } catch (_: Exception) { }
+                }
+                return true
+            }
             KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
                 if (call?.state == Call.STATE_RINGING) {
                     try { (getSystemService(Context.TELECOM_SERVICE) as TelecomManager).silenceRinger() } catch (_: Exception) { }
