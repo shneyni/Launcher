@@ -13,6 +13,15 @@ import android.app.AlertDialog
 import android.app.NotificationManager
 import android.content.pm.ApplicationInfo
 import android.provider.Settings
+import android.database.ContentObserver
+import android.provider.Telephony
+import android.telephony.SmsManager
+import android.text.InputType
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -60,7 +69,10 @@ private const val WHITE = 0xFFF5F5F5.toInt()
 
 private data class LaunchableApp(val packageName: String, val label: String, val icon: Drawable)
 private const val CALLS_APP_ID = "il.co.maqshim.launcher.calls"
-private enum class Page { HOME, SHORTCUTS, APPS, MANAGE, REORDER, DIAL, HISTORY }
+private const val MESSAGES_APP_ID = "il.co.maqshim.launcher.messages"
+private class SmsThread(val id: Long, val address: String, val name: String, val snippet: String, val unread: Int)
+private class SmsItem(val text: String, val outgoing: Boolean, val date: Long)
+private enum class Page { HOME, SHORTCUTS, APPS, MANAGE, REORDER, DIAL, HISTORY, MESSAGES, THREAD, COMPOSE }
 private class ContactEntry(val name: String, val number: String, val digits: String, val wordCodes: List<String>, val fullCode: String)
 private class MenuState(val title: String, val items: List<Pair<String, () -> Unit>>, var index: Int = 0)
 
@@ -75,6 +87,18 @@ class LauncherActivity : NoTouchActivity() {
     private var arranging = false
     private var grabbed = false
     private var historyFrom = Page.HOME
+    private var smsThreads: List<SmsThread> = emptyList()
+    private var smsItems: List<SmsItem> = emptyList()
+    private var currentThread: SmsThread? = null
+    private var composeNew = false
+    private var messagesFrom = Page.APPS
+    private var numberField: EditText? = null
+    private var bodyField: EditText? = null
+    private var pendingSend: Pair<String, String>? = null
+    private val nameCache = HashMap<String, String>()
+    private val callLogObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) { NotificationHub.refreshMissed(applicationContext) }
+    }
     private val wallpaperReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             WallpaperHelper.invalidate()
@@ -88,7 +112,7 @@ class LauncherActivity : NoTouchActivity() {
     private var contactsLoadedAt = 0L
     private var contactsPrompted = false
     private var pendingCall: String? = null
-    private var historyRows: List<Pair<String, String>> = emptyList()
+    private var historyRows: List<Pair<CharSequence, String>> = emptyList()
     private var cardsView: CardsView? = null
     private val hubListener = Runnable { refreshCards() }
     private val progressTick = object : Runnable {
@@ -145,7 +169,6 @@ class LauncherActivity : NoTouchActivity() {
         ContextCompat.registerReceiver(this, wallpaperReceiver, android.content.IntentFilter(Intent.ACTION_WALLPAPER_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
         refreshAppsIfNeeded(true)
         render()
-        ensureLockService()
         if (handleDialIntent(intent)) { prepareDial(); render() }
         if (notificationAccess()) {
             try { NotificationListenerService.requestRebind(ComponentName(this, NotifListener::class.java)) } catch (_: Exception) { }
@@ -186,17 +209,15 @@ class LauncherActivity : NoTouchActivity() {
         if (::root.isInitialized) render()
     }
 
-    private fun ensureLockService() {
-        if (!LockState.enabled(this)) return
-        try { ContextCompat.startForegroundService(this, Intent(this, LockService::class.java)) } catch (_: Exception) { }
-    }
-
     override fun onResume() {
         super.onResume(); if (!statusReceiverRegistered) { val filter=android.content.IntentFilter().apply { addAction(BluetoothAdapter.ACTION_STATE_CHANGED); addAction(WifiManager.WIFI_STATE_CHANGED_ACTION); addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION); addAction(WifiManager.RSSI_CHANGED_ACTION); addAction(Intent.ACTION_BATTERY_CHANGED); addAction(Intent.ACTION_POWER_CONNECTED); addAction(Intent.ACTION_POWER_DISCONNECTED) }; if (Build.VERSION.SDK_INT >= 33) registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED) else registerReceiver(statusReceiver, filter); statusReceiverRegistered=true }
         handler.removeCallbacks(clockTick)
         handler.post(clockTick)
         NotificationHub.listeners.add(hubListener)
         CallManager.listeners.add(hubListener)
+        NotificationHub.accessEnabled = notificationAccess()
+        NotificationHub.refreshMissed(applicationContext)
+        try { contentResolver.registerContentObserver(CallLog.Calls.CONTENT_URI, true, callLogObserver) } catch (_: Exception) { }
         KeyAccessibilityService.onPoundShort = { dialAppend('#') }
         KeyAccessibilityService.onEndKey = { endKeyBack() }
         handler.removeCallbacks(progressTick)
@@ -216,6 +237,7 @@ class LauncherActivity : NoTouchActivity() {
         handler.removeCallbacks(progressTick)
         NotificationHub.listeners.remove(hubListener)
         CallManager.listeners.remove(hubListener)
+        try { contentResolver.unregisterContentObserver(callLogObserver) } catch (_: Exception) { }
         KeyAccessibilityService.onPoundShort = null
         KeyAccessibilityService.onEndKey = null
         if (statusReceiverRegistered) { runCatching { unregisterReceiver(statusReceiver) }; statusReceiverRegistered=false }; super.onPause()
@@ -234,7 +256,10 @@ class LauncherActivity : NoTouchActivity() {
                 LaunchableApp(pkg, r.loadLabel(packageManager)?.toString()?.trim().orEmpty().ifBlank { pkg }, r.loadIcon(packageManager))
             } catch (_: Exception) { null }
         }.distinctBy { it.packageName + "/" + it.label }
-            .plus(LaunchableApp(CALLS_APP_ID, "שיחות", PhoneIconDrawable()))
+            .plus(listOf(
+                LaunchableApp(CALLS_APP_ID, "שיחות", AppIconDrawable(SvgPaths.PHONE, 24f, 0xFF2EA043.toInt())),
+                LaunchableApp(MESSAGES_APP_ID, "הודעות", AppIconDrawable(SvgPaths.MESSAGE, 24f, 0xFF1E88E5.toInt()))
+            ))
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
         // the user's own arrangement wins; apps that were never arranged keep alphabetical order after them
         val saved = prefs.getString("app_order", "")!!.split('|').filter { it.isNotBlank() }
@@ -280,6 +305,9 @@ class LauncherActivity : NoTouchActivity() {
     }
 
     private fun render() {
+        // only the message editor needs real view focus; everywhere else the keys belong to us
+        root.descendantFocusability = if (page == Page.COMPOSE) ViewGroup.FOCUS_AFTER_DESCENDANTS else ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        if (page != Page.COMPOSE) hideIme()
         root.removeAllViews()
         root.addView(statusBar(), LinearLayout.LayoutParams(-1, dp(27)))
         val body = FrameLayout(this).apply { setBackgroundColor(BLACK) }
@@ -292,6 +320,9 @@ class LauncherActivity : NoTouchActivity() {
             Page.REORDER -> renderReorder(body)
             Page.DIAL -> renderDial(body)
             Page.HISTORY -> renderHistory(body)
+            Page.MESSAGES -> renderMessages(body)
+            Page.THREAD -> renderThread(body)
+            Page.COMPOSE -> renderCompose(body)
         }
         menu?.let { menuOverlay(body, it) }
         root.addView(softKeys(), LinearLayout.LayoutParams(-1, dp(43)))
@@ -530,13 +561,15 @@ class LauncherActivity : NoTouchActivity() {
             Page.HOME -> "קיצורים"
             Page.MANAGE, Page.REORDER -> "שמירה"
             Page.HISTORY -> "חייג"
+            Page.THREAD -> "השב"
+            Page.COMPOSE -> "שלח"
             Page.APPS -> if (arranging) "סיום" else "אפשרויות"
             else -> "אפשרויות"
         }
         val right = if (page == Page.HOME) "אנשי קשר" else "אחורה"
         val leftBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; layoutDirection = View.LAYOUT_DIRECTION_LTR }
         if (page == Page.HOME) leftBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_shortcuts); contentDescription = "קיצורים" }, LinearLayout.LayoutParams(dp(29), dp(29)))
-        if (page != Page.HOME) leftBox.addView(if (page == Page.MANAGE || page == Page.REORDER || page == Page.HISTORY || (page == Page.APPS && arranging)) label(left, 13, WHITE, true).apply { contentDescription = "מקש שמאל: $left" } else ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_options); contentDescription = "אפשרויות"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(34), dp(34)))
+        if (page != Page.HOME) leftBox.addView(if (page == Page.MANAGE || page == Page.REORDER || page == Page.HISTORY || page == Page.THREAD || page == Page.COMPOSE || (page == Page.APPS && arranging)) label(left, 13, WHITE, true).apply { contentDescription = "מקש שמאל: $left" } else ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_options); contentDescription = "אפשרויות"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(34), dp(34)))
         addView(leftBox, LinearLayout.LayoutParams(0, -1, 1f))
         val rightBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; layoutDirection = View.LAYOUT_DIRECTION_LTR }
         if (page == Page.HOME) rightBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_contacts); contentDescription = "אנשי קשר" }, LinearLayout.LayoutParams(dp(27), dp(27)))
@@ -544,7 +577,7 @@ class LauncherActivity : NoTouchActivity() {
         addView(rightBox, LinearLayout.LayoutParams(0, -1, 1f))
     }
 
-    private fun label(text: String, size: Int, color: Int, bold: Boolean = false): TextView = TextView(this).apply {
+    private fun label(text: CharSequence, size: Int, color: Int, bold: Boolean = false): TextView = TextView(this).apply {
         this.text = text
         textSize = size.toFloat()
         setTextColor(color)
@@ -627,7 +660,7 @@ class LauncherActivity : NoTouchActivity() {
     private fun toggleLockScreen() {
         val enable = !LockState.enabled(this)
         LockState.setEnabled(this, enable)
-        if (enable) ensureLockService() else { stopService(Intent(this, LockService::class.java)); LockState.setLocked(this, false) }
+        if (!enable) LockState.setLocked(this, false)
         toast("מסך נעילה מותאם: ${onOff(enable)}")
     }
 
@@ -716,6 +749,7 @@ class LauncherActivity : NoTouchActivity() {
 
     private fun launchApp(app: LaunchableApp) {
         if (app.packageName == CALLS_APP_ID) { openHistory(); return }
+        if (app.packageName == MESSAGES_APP_ID) { openMessages(); return }
         try {
             val launch = packageManager.getLaunchIntentForPackage(app.packageName)
             if (launch == null) { toast("אי אפשר לפתוח את ${app.label}"); return }
@@ -727,7 +761,7 @@ class LauncherActivity : NoTouchActivity() {
     }
 
     private fun showAppActions(app: LaunchableApp) {
-        if (app.packageName == CALLS_APP_ID) { openMenu(app.label, listOf(item("פתח") { openHistory() })); return }
+        if (app.packageName == CALLS_APP_ID || app.packageName == MESSAGES_APP_ID) { openMenu(app.label, listOf(item("פתח") { launchApp(app) })); return }
         openMenu(app.label, listOf(
             item("פתח") { launchApp(app) },
             item("פרטי אפליקציה") { startQuiet(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.packageName}")), "לא ניתן לפתוח את פרטי האפליקציה") },
@@ -770,6 +804,18 @@ class LauncherActivity : NoTouchActivity() {
     @Deprecated("Permission result callback")
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 46) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) openMessages()
+            else toast("בלי הרשאה אי אפשר להציג הודעות")
+            return
+        }
+        if (requestCode == 47) {
+            val pending = pendingSend
+            pendingSend = null
+            if (pending != null && ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED) sendSms(pending.first, pending.second)
+            else toast("בלי הרשאה אי אפשר לשלוח הודעות")
+            return
+        }
         if (requestCode == 45) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED) openHistory()
             else toast("בלי הרשאה אי אפשר להציג היסטוריית שיחות")
@@ -808,6 +854,9 @@ class LauncherActivity : NoTouchActivity() {
             Page.REORDER -> { moving = false; page = returnPage; render() }
             Page.DIAL -> dialBack()
             Page.HISTORY -> { page = historyFrom; selected = 0; render() }
+            Page.MESSAGES -> { page = messagesFrom; selected = 0; render() }
+            Page.THREAD -> { page = Page.MESSAGES; selected = 0; render() }
+            Page.COMPOSE -> { if (composeNew || currentThread == null) { page = Page.MESSAGES; selected = 0 } else page = Page.THREAD; render() }
         }
     }
 
@@ -844,6 +893,25 @@ class LauncherActivity : NoTouchActivity() {
                 KeyEvent.KEYCODE_DPAD_LEFT -> { if (focusedCard() == CardsView.Kind.MEDIA) NotificationHub.skip(false); return true }
                 KeyEvent.KEYCODE_DPAD_RIGHT -> { if (focusedCard() == CardsView.Kind.MEDIA) NotificationHub.skip(true); return true }
                 KeyEvent.KEYCODE_SOFT_RIGHT -> { openContacts(); return true }
+            }
+            Page.MESSAGES -> when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> { selectRow(selected - 1); return true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> { selectRow(selected + 1); return true }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { smsThreads.getOrNull(selected)?.let { openThread(it) }; return true }
+                KeyEvent.KEYCODE_CALL -> { smsThreads.getOrNull(selected)?.let { callNumber(it.address) }; return true }
+                KeyEvent.KEYCODE_SOFT_LEFT -> { openMenu("הודעות", listOf(item("הודעה חדשה") { startCompose(null) })); return true }
+                KeyEvent.KEYCODE_SOFT_RIGHT -> { goBack(); return true }
+            }
+            Page.THREAD -> when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> { selectRow(selected - 1); return true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> { selectRow(selected + 1); return true }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SOFT_LEFT -> { startCompose(currentThread); return true }
+                KeyEvent.KEYCODE_CALL -> { currentThread?.let { callNumber(it.address) }; return true }
+                KeyEvent.KEYCODE_SOFT_RIGHT -> { goBack(); return true }
+            }
+            Page.COMPOSE -> when (keyCode) {
+                KeyEvent.KEYCODE_SOFT_LEFT -> { sendCompose(); return true }
+                KeyEvent.KEYCODE_SOFT_RIGHT -> { goBack(); return true }
             }
             Page.HISTORY -> when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP -> { selectRow(selected - 1); return true }
@@ -1088,6 +1156,226 @@ class LauncherActivity : NoTouchActivity() {
         catch (_: Exception) { toast("לא ניתן לחייג") }
     }
 
+    // ---------------- messages ----------------
+
+    private fun hasPermission(permission: String) = ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun contactName(number: String): String {
+        if (number.isBlank()) return ""
+        nameCache[number]?.let { return it }
+        var name = number
+        if (hasPermission(Manifest.permission.READ_CONTACTS)) {
+            try {
+                val uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number))
+                contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)?.use {
+                    if (it.moveToFirst()) name = it.getString(0) ?: number
+                }
+            } catch (_: Exception) { }
+        }
+        nameCache[number] = name
+        return name
+    }
+
+    private fun openMessages() {
+        if (!hasPermission(Manifest.permission.READ_SMS)) {
+            requestPermissions(arrayOf(Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS, Manifest.permission.READ_CONTACTS), 46)
+            return
+        }
+        smsThreads = loadThreads()
+        selected = 0
+        messagesFrom = if (page == Page.APPS || page == Page.SHORTCUTS) page else Page.HOME
+        page = Page.MESSAGES
+        render()
+    }
+
+    /** Conversations from the phone's SMS database (newest first). */
+    private fun loadThreads(): List<SmsThread> {
+        class Acc(val address: String, val snippet: String) { var unread = 0 }
+        val map = LinkedHashMap<Long, Acc>()
+        try {
+            contentResolver.query(
+                Telephony.Sms.CONTENT_URI,
+                arrayOf(Telephony.Sms.THREAD_ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.TYPE, Telephony.Sms.READ),
+                null, null, Telephony.Sms.DATE + " DESC"
+            )?.use { c ->
+                var rows = 0
+                while (c.moveToNext() && rows < 2000) {
+                    rows++
+                    val acc = map.getOrPut(c.getLong(0)) { Acc(c.getString(1).orEmpty(), c.getString(2).orEmpty()) }
+                    if (c.getInt(3) == Telephony.Sms.MESSAGE_TYPE_INBOX && c.getInt(4) == 0) acc.unread++
+                }
+            }
+        } catch (_: Exception) { }
+        return map.entries.take(80).map { SmsThread(it.key, it.value.address, contactName(it.value.address), it.value.snippet, it.value.unread) }
+    }
+
+    private fun openThread(thread: SmsThread) {
+        currentThread = thread
+        val items = mutableListOf<SmsItem>()
+        try {
+            contentResolver.query(
+                Telephony.Sms.CONTENT_URI,
+                arrayOf(Telephony.Sms.BODY, Telephony.Sms.TYPE, Telephony.Sms.DATE),
+                Telephony.Sms.THREAD_ID + "=?", arrayOf(thread.id.toString()), Telephony.Sms.DATE + " ASC"
+            )?.use { c ->
+                while (c.moveToNext()) items.add(SmsItem(c.getString(0).orEmpty(), c.getInt(1) != Telephony.Sms.MESSAGE_TYPE_INBOX, c.getLong(2)))
+            }
+        } catch (_: Exception) { }
+        smsItems = items.takeLast(100)
+        selected = (smsItems.size - 1).coerceAtLeast(0)
+        page = Page.THREAD
+        render()
+    }
+
+    private fun startCompose(thread: SmsThread?) {
+        composeNew = thread == null
+        if (thread != null) currentThread = thread
+        page = Page.COMPOSE
+        render()
+    }
+
+    private fun hideIme() {
+        try {
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(root.windowToken, 0)
+        } catch (_: Exception) { }
+    }
+
+    private fun sendCompose() {
+        val number = if (composeNew) numberField?.text?.toString()?.trim().orEmpty() else currentThread?.address.orEmpty()
+        val body = bodyField?.text?.toString()?.trim().orEmpty()
+        if (number.isBlank()) { toast("יש להזין מספר טלפון"); return }
+        if (body.isBlank()) { toast("ההודעה ריקה"); return }
+        sendSms(number, body)
+    }
+
+    private fun sendSms(number: String, body: String) {
+        if (!hasPermission(Manifest.permission.SEND_SMS)) {
+            pendingSend = number to body
+            requestPermissions(arrayOf(Manifest.permission.SEND_SMS), 47)
+            return
+        }
+        try {
+            @Suppress("DEPRECATION")
+            val sms = if (Build.VERSION.SDK_INT >= 31) getSystemService(SmsManager::class.java) else SmsManager.getDefault()
+            val parts = sms.divideMessage(body)
+            if (parts.size > 1) sms.sendMultipartTextMessage(number, null, parts, null, null)
+            else sms.sendTextMessage(number, null, body, null, null)
+        } catch (_: Exception) { toast("שליחת ההודעה נכשלה"); return }
+        toast("ההודעה נשלחה")
+        hideIme()
+        val thread = currentThread
+        smsThreads = loadThreads()
+        if (!composeNew && thread != null) {
+            openThread(thread)
+            if (smsItems.lastOrNull()?.text != body) { smsItems = smsItems + SmsItem(body, true, System.currentTimeMillis()); render() }
+        } else {
+            selected = 0
+            page = Page.MESSAGES
+            render()
+        }
+    }
+
+    private fun arrowText(arrow: String, color: Int, rest: String): CharSequence {
+        val text = SpannableString("$arrow $rest")
+        text.setSpan(ForegroundColorSpan(color), 0, arrow.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return text
+    }
+
+    private fun listShell(title: String, hint: String, frame: FrameLayout): Pair<LinearLayout, ScrollView> {
+        val wrapper = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(6), dp(12), dp(4)) }
+        wrapper.addView(label(title, 16, YELLOW, true).apply { gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; maxLines = 1 }, LinearLayout.LayoutParams(-1, dp(32)))
+        wrapper.addView(View(this).apply { setBackgroundColor(YELLOW) }, LinearLayout.LayoutParams(-1, dp(2)).apply { bottomMargin = dp(6) })
+        listRows.clear()
+        val scroll = ScrollView(this).apply { isFocusable = false; isFocusableInTouchMode = false; isFillViewport = false; overScrollMode = View.OVER_SCROLL_NEVER }
+        listScroll = scroll
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        scroll.addView(list)
+        wrapper.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        wrapper.addView(label(hint, 11, GRAY).apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, 0) }, LinearLayout.LayoutParams(-1, dp(24)))
+        frame.addView(wrapper, FrameLayout.LayoutParams(-1, -1))
+        return list to scroll
+    }
+
+    private fun addListRow(list: LinearLayout, index: Int, text: CharSequence, maxLines: Int, minHeight: Int) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            minimumHeight = dp(minHeight)
+            setPadding(dp(7), dp(4), dp(7), dp(4))
+            setBackgroundColor(if (index == selected) YELLOW else if (index % 2 == 0) 0xFF101315.toInt() else BLACK)
+        }
+        row.addView(View(this), LinearLayout.LayoutParams(dp(4), 1))
+        row.addView(label(text, 15, if (index == selected) BLACK else WHITE).apply {
+            gravity = Gravity.CENTER_VERTICAL; this.maxLines = maxLines; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(9), 0, 0, 0)
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        listRows.add(row)
+        list.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(1) })
+    }
+
+    private fun renderMessages(frame: FrameLayout) {
+        val (list, scroll) = listShell("הודעות", "אישור: פתיחה · חייג: התקשרות · שמאל: הודעה חדשה", frame)
+        if (smsThreads.isEmpty()) list.addView(label("אין הודעות", 16, GRAY).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, dp(80)))
+        smsThreads.forEachIndexed { i, t ->
+            val unread = if (t.unread > 0) "● ${t.unread}  " else ""
+            addListRow(list, i, unread + t.name + "\n" + t.snippet, 2, 54)
+        }
+        scroll.post { list.getChildAt(selected)?.let { scroll.scrollTo(0, it.top) } }
+    }
+
+    private fun renderThread(frame: FrameLayout) {
+        val thread = currentThread
+        val (list, scroll) = listShell(thread?.name.orEmpty(), "אישור או שמאל: השב · חייג: התקשרות", frame)
+        val format = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
+        if (smsItems.isEmpty()) list.addView(label("אין הודעות", 16, GRAY).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, dp(80)))
+        smsItems.forEachIndexed { i, m ->
+            val arrow = if (m.outgoing) "↗" else "↙"
+            val color = if (m.outgoing) 0xFF30D158.toInt() else 0xFF4DA3FF.toInt()
+            addListRow(list, i, arrowText(arrow, color, m.text + "\n" + format.format(Date(m.date))), 8, 46)
+        }
+        scroll.post { list.getChildAt(selected)?.let { scroll.scrollTo(0, it.top) } }
+    }
+
+    private fun styledField(hintText: String): EditText = EditText(this).apply {
+        hint = hintText
+        textSize = 16f
+        setTextColor(WHITE)
+        setHintTextColor(GRAY)
+        isFocusable = true
+        isFocusableInTouchMode = true
+        layoutDirection = View.LAYOUT_DIRECTION_RTL
+        textDirection = View.TEXT_DIRECTION_FIRST_STRONG
+        setPadding(dp(10), dp(8), dp(10), dp(8))
+        background = android.graphics.drawable.GradientDrawable().apply { setColor(0xFF141719.toInt()); cornerRadius = dp(8).toFloat(); setStroke(dp(2), YELLOW) }
+    }
+
+    private fun renderCompose(frame: FrameLayout) {
+        val wrapper = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(4)) }
+        val thread = currentThread
+        wrapper.addView(label(if (composeNew) "הודעה חדשה" else "אל: ${thread?.name.orEmpty()}", 16, YELLOW, true).apply { gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; maxLines = 1 }, LinearLayout.LayoutParams(-1, dp(32)))
+        wrapper.addView(View(this).apply { setBackgroundColor(YELLOW) }, LinearLayout.LayoutParams(-1, dp(2)).apply { bottomMargin = dp(8) })
+        numberField = null
+        if (composeNew) {
+            val number = styledField("מספר טלפון").apply { inputType = InputType.TYPE_CLASS_PHONE; maxLines = 1 }
+            numberField = number
+            wrapper.addView(number, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        }
+        val body = styledField("הודעה").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            minLines = 4
+            gravity = Gravity.TOP or Gravity.RIGHT
+        }
+        bodyField = body
+        wrapper.addView(body, LinearLayout.LayoutParams(-1, -2))
+        wrapper.addView(label("שמאל: שליחה · אחורה: ביטול", 11, GRAY).apply { gravity = Gravity.CENTER; setPadding(0, dp(8), 0, 0) }, LinearLayout.LayoutParams(-1, dp(28)))
+        frame.addView(wrapper, FrameLayout.LayoutParams(-1, -1))
+        frame.post {
+            val target: EditText = numberField ?: body
+            target.requestFocus()
+            try { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(target, 0) } catch (_: Exception) { }
+        }
+    }
+
     /** Left key on the dialer: more options for the typed number (or the highlighted contact). */
     private fun showDialOptions() {
         val number = dialRows.getOrNull(selected)?.second ?: dialInput.toString()
@@ -1111,15 +1399,16 @@ class LauncherActivity : NoTouchActivity() {
             return
         }
         historyRows = loadHistory()
+        NotificationHub.markMissedRead(this)
         selected = 0
         historyFrom = if (page == Page.APPS || page == Page.SHORTCUTS) page else Page.HOME
         page = Page.HISTORY
         render()
     }
 
-    /** Recent calls from the device call log: text to show, and the number to call back. */
-    private fun loadHistory(): List<Pair<String, String>> {
-        val out = mutableListOf<Pair<String, String>>()
+    /** Recent calls from the device call log: text to show (colored arrow), and the number to call back. */
+    private fun loadHistory(): List<Pair<CharSequence, String>> {
+        val out = mutableListOf<Pair<CharSequence, String>>()
         try {
             val format = SimpleDateFormat("dd/MM HH:mm", Locale.getDefault())
             contentResolver.query(
@@ -1131,13 +1420,19 @@ class LauncherActivity : NoTouchActivity() {
                     val number = c.getString(0).orEmpty()
                     val name = c.getString(1)
                     val who = if (!name.isNullOrBlank()) name else if (number.isBlank()) "מספר חסוי" else number
-                    val mark = when (c.getInt(2)) {
-                        CallLog.Calls.INCOMING_TYPE -> "↙"
-                        CallLog.Calls.OUTGOING_TYPE -> "↗"
-                        CallLog.Calls.MISSED_TYPE, CallLog.Calls.REJECTED_TYPE -> "✗"
-                        else -> "•"
+                    val type = c.getInt(2)
+                    // outgoing green, incoming blue, missed red, rejected orange
+                    val color = when (type) {
+                        CallLog.Calls.OUTGOING_TYPE -> 0xFF30D158.toInt()
+                        CallLog.Calls.INCOMING_TYPE -> 0xFF4DA3FF.toInt()
+                        CallLog.Calls.MISSED_TYPE -> 0xFFFF453A.toInt()
+                        CallLog.Calls.REJECTED_TYPE, CallLog.Calls.BLOCKED_TYPE -> 0xFFFF9F0A.toInt()
+                        else -> 0xFFA6A6A6.toInt()
                     }
-                    out.add("$mark $who · ${format.format(Date(c.getLong(3)))}" to number)
+                    val arrow = if (type == CallLog.Calls.OUTGOING_TYPE) "↗" else "↙"
+                    val line = SpannableString("$arrow $who · ${format.format(Date(c.getLong(3)))}")
+                    line.setSpan(ForegroundColorSpan(color), 0, arrow.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    out.add(line to number)
                 }
             }
         } catch (_: Exception) { }
@@ -1217,7 +1512,7 @@ class LauncherActivity : NoTouchActivity() {
     /** Red end key on the dialer / calls screen: go home first; the next press switches the screen off. */
     private fun endKeyBack(): Boolean {
         if (menu != null || CallManager.calls.isNotEmpty()) return false
-        if (page != Page.DIAL && page != Page.HISTORY) return false
+        if (page != Page.DIAL && page != Page.HISTORY && page != Page.MESSAGES && page != Page.THREAD && page != Page.COMPOSE) return false
         dialInput.setLength(0)
         dialRows = emptyList()
         page = Page.HOME
@@ -1251,7 +1546,8 @@ class LauncherActivity : NoTouchActivity() {
     private fun activateCard() {
         when (focusedCard()) {
             CardsView.Kind.CALL -> startQuiet(Intent(this, CallActivity::class.java), "אי אפשר לפתוח את השיחה")
-            CardsView.Kind.CALLS -> sendPending(NotificationHub.calls?.intent)
+            CardsView.Kind.CALLS -> openHistory()
+            CardsView.Kind.SETUP -> startQuiet(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS), "ההגדרה אינה זמינה במכשיר")
             CardsView.Kind.MESSAGES -> sendPending(NotificationHub.messages?.intent)
             CardsView.Kind.MEDIA -> NotificationHub.togglePlay()
             null -> { }
@@ -1294,7 +1590,9 @@ class LauncherActivity : NoTouchActivity() {
         return super.onKeyLongPress(keyCode, event)
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+    override fun onKeyDown(rawKeyCode: Int, event: KeyEvent?): Boolean {
+        // some keypads send MENU for the left function key
+        val keyCode = if (rawKeyCode == KeyEvent.KEYCODE_MENU) KeyEvent.KEYCODE_SOFT_LEFT else rawKeyCode
         val repeat = event?.repeatCount ?: 0
         if (keyCode == KeyEvent.KEYCODE_HOME) { goHome(); return true }
         if (keyCode == KeyEvent.KEYCODE_POWER) {

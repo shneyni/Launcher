@@ -71,6 +71,8 @@ class KeyAccessibilityService : AccessibilityService() {
             )
             screenReceiverRegistered = true
         }
+        // after a restart / reboot the lock screen comes back by itself
+        if (LockState.enabled(this) && LockState.isLocked(this)) LockActivity.show(this)
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -85,7 +87,7 @@ class KeyAccessibilityService : AccessibilityService() {
     override fun onKeyEvent(event: KeyEvent): Boolean {
         // While our lock screen is up, hand the left soft key straight to it.
         val lock = LockActivity.current
-        if (lock != null && LockState.isLocked(this) &&
+        if (lock != null && LockActivity.visible && LockState.isLocked(this) &&
             (event.keyCode == KeyEvent.KEYCODE_SOFT_LEFT || event.keyCode == KeyEvent.KEYCODE_MENU)) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) handler.post { lock.handleKey(event.keyCode) }
             return true

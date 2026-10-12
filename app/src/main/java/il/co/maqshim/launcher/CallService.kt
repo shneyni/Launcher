@@ -1,11 +1,13 @@
 package il.co.maqshim.launcher
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import android.telecom.Call
 import android.telecom.CallAudioState
 import android.telecom.InCallService
@@ -15,7 +17,7 @@ import android.telecom.InCallService
 class CallService : InCallService() {
     companion object {
         @Volatile var instance: CallService? = null
-        private const val NOTIFICATION_ID = 21
+        const val NOTIFICATION_ID = 21
     }
 
     private val callback = object : Call.Callback() {
@@ -59,10 +61,17 @@ class CallService : InCallService() {
         CallManager.fire()
     }
 
+    /**
+     * Only a ringing call posts a notification, and only when the screen is off or locked
+     * (that is what lets the call screen appear over the lock screen). No pop-up otherwise.
+     */
     private fun updateNotification() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val call = CallManager.primary()
-        if (call == null) { nm.cancel(NOTIFICATION_ID); return }
+        if (call == null || call.state != Call.STATE_RINGING) { nm.cancel(NOTIFICATION_ID); return }
+        val interactive = (getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
+        val keyguard = (getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
+        if (interactive && !keyguard && !LockState.isLocked(this)) { nm.cancel(NOTIFICATION_ID); return }
         val pending = PendingIntent.getActivity(this, 0, callIntent(), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val builder = Notification.Builder(this, "calls")
             .setSmallIcon(R.drawable.ic_launcher)
@@ -71,7 +80,7 @@ class CallService : InCallService() {
             .setCategory(Notification.CATEGORY_CALL)
             .setOngoing(true)
             .setContentIntent(pending)
-        if (call.state == Call.STATE_RINGING) builder.setFullScreenIntent(pending, true)
+            .setFullScreenIntent(pending, true)
         try { nm.notify(NOTIFICATION_ID, builder.build()) } catch (_: Exception) { }
     }
 }

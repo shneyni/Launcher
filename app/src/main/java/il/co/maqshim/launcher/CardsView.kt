@@ -35,7 +35,7 @@ class ProgressLine(context: Context) : View(context) {
  * interactive = true shows a focus frame (home screen); false is display-only (lock screen).
  */
 class CardsView(context: Context, private val interactive: Boolean) : LinearLayout(context) {
-    enum class Kind { CALL, CALLS, MESSAGES, MEDIA }
+    enum class Kind { CALL, CALLS, MESSAGES, MEDIA, SETUP }
 
     var kinds: List<Kind> = emptyList()
         private set
@@ -60,14 +60,16 @@ class CardsView(context: Context, private val interactive: Boolean) : LinearLayo
         if (NotificationHub.calls != null) list.add(Kind.CALLS)
         if (NotificationHub.messages != null) list.add(Kind.MESSAGES)
         if (NotificationHub.media != null) list.add(Kind.MEDIA)
+        if (interactive && !NotificationHub.accessEnabled) list.add(Kind.SETUP)
         kinds = list
         focus = if (interactive) requestedFocus.coerceIn(-1, list.size - 1) else -1
         list.forEachIndexed { i, kind ->
             val focused = interactive && i == focus
             val card = when (kind) {
                 Kind.CALL -> textCard(CallManager.cardText(context).orEmpty(), focused, "handset", 0xFF5FD068.toInt(), true)
-                Kind.CALLS -> textCard(NotificationHub.callsText(), focused, "handset")
+                Kind.CALLS -> textCard(NotificationHub.callsText(), focused, "missed")
                 Kind.MESSAGES -> textCard(NotificationHub.messagesText(), focused, "message")
+                Kind.SETUP -> textCard("אישור: הפעלת גישה להתראות", focused, "message")
                 Kind.MEDIA -> NotificationHub.media?.let { mediaCard(it, focused) } ?: View(context)
             }
             addView(card, LayoutParams(-1, dp(46)).apply { topMargin = dp(3) })

@@ -1,6 +1,11 @@
 package il.co.maqshim.launcher
 
+import android.Manifest
 import android.app.PendingIntent
+import android.content.ContentValues
+import android.content.pm.PackageManager
+import android.provider.CallLog
+import androidx.core.content.ContextCompat
 import android.content.Context
 import android.content.Intent
 import android.media.session.MediaController
@@ -22,6 +27,7 @@ object NotificationHub {
     @Volatile var calls: Calls? = null
     @Volatile var messages: Messages? = null
     @Volatile var media: Media? = null
+    @Volatile var accessEnabled = true
 
     val listeners = CopyOnWriteArraySet<Runnable>()
     private val main = Handler(Looper.getMainLooper())
@@ -30,6 +36,50 @@ object NotificationHub {
         calls = newCalls
         messages = newMessages
         fire()
+    }
+
+    fun publishMessages(newMessages: Messages?) {
+        messages = newMessages
+        fire()
+    }
+
+    /**
+     * Missed calls come from the call log (when we are the phone app nobody else posts a
+     * "missed call" notification). Unread = new missed calls.
+     */
+    fun refreshMissed(ctx: Context) {
+        var count = 0
+        var who = ""
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED) {
+            try {
+                ctx.contentResolver.query(
+                    CallLog.Calls.CONTENT_URI,
+                    arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.CACHED_NAME),
+                    CallLog.Calls.TYPE + "=? AND " + CallLog.Calls.NEW + "=1",
+                    arrayOf(CallLog.Calls.MISSED_TYPE.toString()),
+                    CallLog.Calls.DATE + " DESC"
+                )?.use { c ->
+                    while (c.moveToNext()) {
+                        if (count == 0) {
+                            val name = c.getString(1)
+                            val number = c.getString(0).orEmpty()
+                            who = if (!name.isNullOrBlank()) name else number
+                        }
+                        count++
+                    }
+                }
+            } catch (_: Exception) { }
+        }
+        calls = if (count > 0) Calls(count, who, null) else null
+        fire()
+    }
+
+    /** Opening the calls app marks the missed calls as seen. */
+    fun markMissedRead(ctx: Context) {
+        try {
+            val values = ContentValues().apply { put(CallLog.Calls.NEW, 0); put(CallLog.Calls.IS_READ, 1) }
+            ctx.contentResolver.update(CallLog.Calls.CONTENT_URI, values, CallLog.Calls.TYPE + "=? AND " + CallLog.Calls.NEW + "=1", arrayOf(CallLog.Calls.MISSED_TYPE.toString()))
+        } catch (_: Exception) { }
     }
 
     fun publishMedia(newMedia: Media?) {

@@ -33,8 +33,11 @@ import java.util.Locale
 class LockActivity : NoTouchActivity() {
     companion object {
         @Volatile var current: LockActivity? = null
+        @Volatile var visible = false
 
         fun show(ctx: Context) {
+            // an incoming or ongoing call always wins: the lock screen waits until the call ends
+            if (CallManager.calls.isNotEmpty()) return
             try {
                 ctx.startActivity(
                     Intent(ctx, LockActivity::class.java)
@@ -128,6 +131,11 @@ class LockActivity : NoTouchActivity() {
     override fun onResume() {
         super.onResume()
         if (!LockState.isLocked(this)) { finish(); return }
+        if (CallManager.calls.isNotEmpty()) {
+            try { startActivity(Intent(this, CallActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (_: Exception) { }
+            return
+        }
+        visible = true
         applyWallpaper()
         handler.removeCallbacks(tick)
         handler.post(tick)
@@ -138,6 +146,7 @@ class LockActivity : NoTouchActivity() {
     }
 
     override fun onPause() {
+        visible = false
         handler.removeCallbacks(tick)
         handler.removeCallbacks(progressTick)
         NotificationHub.listeners.remove(hubListener)

@@ -98,16 +98,9 @@ class GlyphView(context: Context, var kind: String, var lit: Boolean = true) : V
                 canvas.drawLine(s * .76f, s * .36f, s * .76f, s * .64f, stroke)
                 canvas.drawLine(s * .88f, s * .43f, s * .88f, s * .57f, stroke)
             }
-            "handset" -> {
-                stroke.strokeWidth = s * .2f
-                canvas.drawArc(RectF(s * .2f, s * .1f, s * .8f, s * .7f), 100f, 95f, false, stroke)
-                canvas.drawCircle(s * .21f, s * .33f, s * .1f, fill)
-                canvas.drawCircle(s * .5f, s * .69f, s * .1f, fill)
-            }
-            "message" -> {
-                canvas.drawRoundRect(RectF(s * .1f, s * .16f, s * .9f, s * .68f), s * .1f, s * .1f, fill)
-                canvas.drawPath(Path().apply { moveTo(s * .26f, s * .62f); lineTo(s * .26f, s * .88f); lineTo(s * .52f, s * .62f); close() }, fill)
-            }
+            "handset" -> svg(canvas, s, SvgPaths.PHONE, 24f)
+            "message" -> svg(canvas, s, SvgPaths.MESSAGE, 24f)
+            "missed" -> svg(canvas, s, SvgPaths.MISSED, 512f)
             "prev" -> {
                 canvas.drawRect(s * .2f, s * .25f, s * .3f, s * .75f, fill)
                 canvas.drawPath(Path().apply { moveTo(s * .8f, s * .22f); lineTo(s * .36f, s * .5f); lineTo(s * .8f, s * .78f); close() }, fill)
@@ -130,6 +123,13 @@ class GlyphView(context: Context, var kind: String, var lit: Boolean = true) : V
         canvas.restore()
     }
 
+    private fun svg(canvas: Canvas, s: Float, data: String, box: Float) {
+        canvas.save()
+        canvas.scale(s / box, s / box)
+        canvas.drawPath(SvgPaths.path(data), fill)
+        canvas.restore()
+    }
+
     private fun speaker(canvas: Canvas, s: Float) {
         val p = Path().apply {
             moveTo(s * .18f, s * .40f); lineTo(s * .32f, s * .40f); lineTo(s * .50f, s * .24f)
@@ -139,13 +139,10 @@ class GlyphView(context: Context, var kind: String, var lit: Boolean = true) : V
     }
 }
 
-/** App icon for the built-in "שיחות" app: a white phone handset on a green square. */
-class PhoneIconDrawable : Drawable() {
-    private val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2EA043.toInt() }
-    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; color = 0xFFFFFFFF.toInt()
-    }
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt() }
+/** App icon: a white vector symbol (SVG path) on a colored rounded square. */
+class AppIconDrawable(private val data: String, private val box: Float, color: Int) : Drawable() {
+    private val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = 0xFFFFFFFF.toInt() }
 
     override fun draw(canvas: Canvas) {
         val b = bounds
@@ -154,13 +151,10 @@ class PhoneIconDrawable : Drawable() {
         canvas.save()
         canvas.translate(b.left.toFloat(), b.top.toFloat())
         canvas.drawRoundRect(RectF(0f, 0f, s, s), s * .22f, s * .22f, background)
-        // handset, same shape as the "handset" glyph, centered
-        val t = s * .62f
-        canvas.translate((s - t) / 2f, (s - t) / 2f)
-        stroke.strokeWidth = t * .2f
-        canvas.drawArc(RectF(t * .2f, t * .1f, t * .8f, t * .7f), 100f, 95f, false, stroke)
-        canvas.drawCircle(t * .21f, t * .33f, t * .1f, fill)
-        canvas.drawCircle(t * .5f, t * .69f, t * .1f, fill)
+        val symbol = s * .58f
+        canvas.translate((s - symbol) / 2f, (s - symbol) / 2f)
+        canvas.scale(symbol / box, symbol / box)
+        canvas.drawPath(SvgPaths.path(data), fill)
         canvas.restore()
     }
 

@@ -37,7 +37,7 @@ class NotifListener : NotificationListenerService() {
     override fun onListenerDisconnected() {
         try { sessionManager?.removeOnActiveSessionsChangedListener(sessionsListener) } catch (_: Exception) { }
         untrack()
-        NotificationHub.publish(null, null)
+        NotificationHub.publishMessages(null)
         NotificationHub.publishMedia(null)
         super.onListenerDisconnected()
     }
@@ -91,7 +91,7 @@ class NotifListener : NotificationListenerService() {
             }
             NotificationHub.Messages(count, senders.toList(), messageUse.firstNotNullOfOrNull { it.notification.contentIntent })
         }
-        NotificationHub.publish(calls, messages)
+        NotificationHub.publishMessages(messages)
     }
 
     // ---- media ----

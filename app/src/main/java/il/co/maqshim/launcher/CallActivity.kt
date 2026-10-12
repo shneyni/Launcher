@@ -1,6 +1,7 @@
 package il.co.maqshim.launcher
 
 import android.Manifest
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -114,6 +115,7 @@ class CallActivity : NoTouchActivity() {
     override fun onResume() {
         super.onResume()
         CallManager.listeners.add(listener)
+        try { (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(CallService.NOTIFICATION_ID) } catch (_: Exception) { }
         KeyAccessibilityService.onPoundShort = { sendDtmf('#') }
         handler.removeCallbacks(tick)
         handler.post(tick)
@@ -155,7 +157,11 @@ class CallActivity : NoTouchActivity() {
             if (!ending) {
                 ending = true
                 stateView.text = "השיחה הסתיימה"
-                handler.postDelayed({ finish() }, 900)
+                // the lock screen (if it was waiting) appears only now, after the call is over
+                handler.postDelayed({
+                    finish()
+                    if (LockState.enabled(this) && LockState.isLocked(this)) LockActivity.show(applicationContext)
+                }, 900)
             }
             return
         }
