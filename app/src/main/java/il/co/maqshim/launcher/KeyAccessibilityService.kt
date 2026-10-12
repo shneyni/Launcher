@@ -33,12 +33,15 @@ class KeyAccessibilityService : AccessibilityService() {
         @Volatile var instance: KeyAccessibilityService? = null
         /** Our own screens (dialer, call screen) register here to receive a short press of "#". */
         @Volatile var onPoundShort: (() -> Unit)? = null
+        /** The launcher registers here: return true to swallow the red end key (go back instead of screen off). */
+        @Volatile var onEndKey: (() -> Boolean)? = null
     }
 
     private val handler = Handler(Looper.getMainLooper())
     private var suppressPowerUntil = 0L
     private var powerHandled = false
     private var poundConsumed = false
+    private var endConsumed = false
     private var poundLong = false
     private val poundLongPress = Runnable { poundLong = true; cycleRinger() }
     private var feedbackView: View? = null
@@ -86,6 +89,15 @@ class KeyAccessibilityService : AccessibilityService() {
             (event.keyCode == KeyEvent.KEYCODE_SOFT_LEFT || event.keyCode == KeyEvent.KEYCODE_MENU)) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) handler.post { lock.handleKey(event.keyCode) }
             return true
+        }
+        if (event.keyCode == KeyEvent.KEYCODE_ENDCALL) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                if (event.repeatCount == 0) endConsumed = onEndKey?.invoke() == true
+                return endConsumed
+            }
+            val consumed = endConsumed
+            endConsumed = false
+            return consumed
         }
         when (event.keyCode) {
             KeyEvent.KEYCODE_POUND -> {

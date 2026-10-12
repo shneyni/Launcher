@@ -2,6 +2,9 @@ package il.co.maqshim.launcher
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.PixelFormat
+import android.graphics.drawable.Drawable
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
@@ -134,4 +137,37 @@ class GlyphView(context: Context, var kind: String, var lit: Boolean = true) : V
         }
         canvas.drawPath(p, fill)
     }
+}
+
+/** App icon for the built-in "שיחות" app: a white phone handset on a green square. */
+class PhoneIconDrawable : Drawable() {
+    private val background = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2EA043.toInt() }
+    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; color = 0xFFFFFFFF.toInt()
+    }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt() }
+
+    override fun draw(canvas: Canvas) {
+        val b = bounds
+        val s = minOf(b.width(), b.height()).toFloat()
+        if (s <= 0f) return
+        canvas.save()
+        canvas.translate(b.left.toFloat(), b.top.toFloat())
+        canvas.drawRoundRect(RectF(0f, 0f, s, s), s * .22f, s * .22f, background)
+        // handset, same shape as the "handset" glyph, centered
+        val t = s * .62f
+        canvas.translate((s - t) / 2f, (s - t) / 2f)
+        stroke.strokeWidth = t * .2f
+        canvas.drawArc(RectF(t * .2f, t * .1f, t * .8f, t * .7f), 100f, 95f, false, stroke)
+        canvas.drawCircle(t * .21f, t * .33f, t * .1f, fill)
+        canvas.drawCircle(t * .5f, t * .69f, t * .1f, fill)
+        canvas.restore()
+    }
+
+    override fun setAlpha(alpha: Int) {}
+    override fun setColorFilter(colorFilter: ColorFilter?) {}
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+    override fun getIntrinsicWidth(): Int = 192
+    override fun getIntrinsicHeight(): Int = 192
 }

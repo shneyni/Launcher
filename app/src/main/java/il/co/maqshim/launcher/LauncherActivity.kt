@@ -59,6 +59,7 @@ private const val GRAY = 0xFFA6A6A6.toInt()
 private const val WHITE = 0xFFF5F5F5.toInt()
 
 private data class LaunchableApp(val packageName: String, val label: String, val icon: Drawable)
+private const val CALLS_APP_ID = "il.co.maqshim.launcher.calls"
 private enum class Page { HOME, SHORTCUTS, APPS, MANAGE, REORDER, DIAL, HISTORY }
 private class ContactEntry(val name: String, val number: String, val digits: String, val wordCodes: List<String>, val fullCode: String)
 private class MenuState(val title: String, val items: List<Pair<String, () -> Unit>>, var index: Int = 0)
@@ -71,6 +72,10 @@ class LauncherActivity : NoTouchActivity() {
     private var selected = 0
     private var menu: MenuState? = null
     private var appsDirty = true
+    private var arranging = false
+    private var grabbed = false
+    private var softLeftLong = false
+    private var historyFrom = Page.HOME
     private val wallpaperReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             WallpaperHelper.invalidate()
@@ -124,6 +129,7 @@ class LauncherActivity : NoTouchActivity() {
             setBackgroundColor(BLACK)
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
         }
         root.setOnApplyWindowInsetsListener { view, insets ->
             val bottomInset = insets.systemWindowInsetBottom
@@ -176,6 +182,8 @@ class LauncherActivity : NoTouchActivity() {
         page = Page.HOME
         selected = 0
         cardFocus = -1
+        arranging = false
+        grabbed = false
         if (::root.isInitialized) render()
     }
 
@@ -191,6 +199,7 @@ class LauncherActivity : NoTouchActivity() {
         NotificationHub.listeners.add(hubListener)
         CallManager.listeners.add(hubListener)
         KeyAccessibilityService.onPoundShort = { dialAppend('#') }
+        KeyAccessibilityService.onEndKey = { endKeyBack() }
         handler.removeCallbacks(progressTick)
         handler.post(progressTick)
         val changed = refreshAppsIfNeeded()
@@ -209,6 +218,7 @@ class LauncherActivity : NoTouchActivity() {
         NotificationHub.listeners.remove(hubListener)
         CallManager.listeners.remove(hubListener)
         KeyAccessibilityService.onPoundShort = null
+        KeyAccessibilityService.onEndKey = null
         if (statusReceiverRegistered) { runCatching { unregisterReceiver(statusReceiver) }; statusReceiverRegistered=false }; super.onPause()
     }
 
@@ -225,7 +235,42 @@ class LauncherActivity : NoTouchActivity() {
                 LaunchableApp(pkg, r.loadLabel(packageManager)?.toString()?.trim().orEmpty().ifBlank { pkg }, r.loadIcon(packageManager))
             } catch (_: Exception) { null }
         }.distinctBy { it.packageName + "/" + it.label }
+            .plus(LaunchableApp(CALLS_APP_ID, "שיחות", PhoneIconDrawable()))
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+        // the user's own arrangement wins; apps that were never arranged keep alphabetical order after them
+        val saved = prefs.getString("app_order", "")!!.split('|').filter { it.isNotBlank() }
+        if (saved.isNotEmpty()) {
+            val position = HashMap<String, Int>()
+            saved.forEachIndexed { index, id -> position[id] = index }
+            apps = apps.sortedBy { position[it.packageName] ?: Int.MAX_VALUE }
+        }
+    }
+
+    private fun saveAppOrder() {
+        prefs.edit().putString("app_order", apps.joinToString("|") { it.packageName }).apply()
+    }
+
+    private fun enterArrange() { arranging = true; grabbed = false; render() }
+
+    private fun exitArrange() {
+        if (grabbed || arranging) saveAppOrder()
+        arranging = false
+        grabbed = false
+        render()
+    }
+
+    /** In arrange mode: moves the selection, or - when an app is picked up - moves the app itself. */
+    private fun arrangeMove(delta: Int) {
+        if (apps.isEmpty()) return
+        val target = (selected + delta).coerceIn(0, apps.lastIndex)
+        if (!grabbed) { selectApp(target); return }
+        if (target == selected) return
+        val list = apps.toMutableList()
+        val item = list.removeAt(selected)
+        list.add(target, item)
+        apps = list
+        selected = target
+        render()
     }
 
     private fun readShortcuts() {
@@ -337,9 +382,9 @@ class LauncherActivity : NoTouchActivity() {
 
     private fun renderApps(frame: FrameLayout) {
         val wrapper = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(10), dp(4), dp(10), dp(4)) }
-        wrapper.addView(label("יישומים", 16, YELLOW, true).apply { gravity = Gravity.RIGHT }, LinearLayout.LayoutParams(-1, dp(27)))
+        wrapper.addView(label(if (!arranging) "יישומים" else if (grabbed) "סידור · הזז בחצים, אישור להנחה" else "סידור · אישור לבחירת יישום", if (arranging) 13 else 16, YELLOW, true).apply { gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL; maxLines = 1 }, LinearLayout.LayoutParams(-1, dp(27)))
         cellViews.clear()
-        val scroll = ScrollView(this).apply { isFillViewport = true; overScrollMode = View.OVER_SCROLL_NEVER }
+        val scroll = ScrollView(this).apply { isFocusable = false; isFocusableInTouchMode = false; isFillViewport = true; overScrollMode = View.OVER_SCROLL_NEVER }
         gridScroll = scroll
         val grid = GridLayout(this).apply {
             columnCount = 3
@@ -380,7 +425,7 @@ class LauncherActivity : NoTouchActivity() {
     }
 
     private fun styleCell(box: LinearLayout, app: LaunchableApp, isSelected: Boolean) {
-        (box.background as? android.graphics.drawable.GradientDrawable)?.setColor(if (isSelected) YELLOW else 0xB3141719.toInt())
+        (box.background as? android.graphics.drawable.GradientDrawable)?.setColor(if (isSelected) (if (grabbed) 0xFFFF8F00.toInt() else YELLOW) else 0xB3141719.toInt())
         (box.getChildAt(1) as? TextView)?.setTextColor(if (isSelected) BLACK else WHITE)
         box.contentDescription = "${app.label}${if (isSelected) ", נבחר" else ""}"
     }
@@ -422,7 +467,7 @@ class LauncherActivity : NoTouchActivity() {
         val wrapper = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(7), dp(12), dp(4)) }
         wrapper.addView(label(title, 18, YELLOW, true).apply { gravity = Gravity.RIGHT; setPadding(0, 0, 0, dp(5)) }, LinearLayout.LayoutParams(-1, dp(32)))
         listRows.clear()
-        val scroll = ScrollView(this).apply { isFillViewport = false; overScrollMode = View.OVER_SCROLL_NEVER }
+        val scroll = ScrollView(this).apply { isFocusable = false; isFocusableInTouchMode = false; isFillViewport = false; overScrollMode = View.OVER_SCROLL_NEVER }
         listScroll = scroll
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         items.forEachIndexed { i, app ->
@@ -486,12 +531,13 @@ class LauncherActivity : NoTouchActivity() {
             Page.HOME -> "קיצורים"
             Page.MANAGE, Page.REORDER -> "שמירה"
             Page.DIAL, Page.HISTORY -> "חייג"
+            Page.APPS -> if (arranging) "סיום" else "אפשרויות"
             else -> "אפשרויות"
         }
         val right = if (page == Page.HOME) "אנשי קשר" else "אחורה"
         val leftBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; layoutDirection = View.LAYOUT_DIRECTION_LTR }
         if (page == Page.HOME) leftBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_shortcuts); contentDescription = "קיצורים" }, LinearLayout.LayoutParams(dp(29), dp(29)))
-        if (page != Page.HOME) leftBox.addView(if (page == Page.MANAGE || page == Page.REORDER || page == Page.DIAL || page == Page.HISTORY) label(left, 13, WHITE, true).apply { contentDescription = "מקש שמאל: $left" } else ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_options); contentDescription = "אפשרויות"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(34), dp(34)))
+        if (page != Page.HOME) leftBox.addView(if (page == Page.MANAGE || page == Page.REORDER || page == Page.DIAL || page == Page.HISTORY || (page == Page.APPS && arranging)) label(left, 13, WHITE, true).apply { contentDescription = "מקש שמאל: $left" } else ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_options); contentDescription = "אפשרויות"; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }, LinearLayout.LayoutParams(dp(34), dp(34)))
         addView(leftBox, LinearLayout.LayoutParams(0, -1, 1f))
         val rightBox = LinearLayout(this@LauncherActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT; layoutDirection = View.LAYOUT_DIRECTION_LTR }
         if (page == Page.HOME) rightBox.addView(ImageView(this@LauncherActivity).apply { setImageResource(R.drawable.ic_contacts); contentDescription = "אנשי קשר" }, LinearLayout.LayoutParams(dp(27), dp(27)))
@@ -595,7 +641,7 @@ class LauncherActivity : NoTouchActivity() {
             background = android.graphics.drawable.GradientDrawable().apply { setColor(0xFF141719.toInt()); cornerRadius = dp(12).toFloat(); setStroke(dp(2), YELLOW) }
         }
         box.addView(label(m.title, 16, YELLOW, true).apply { gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(-1, dp(30)))
-        val scroll = ScrollView(this).apply { overScrollMode = View.OVER_SCROLL_NEVER; isVerticalScrollBarEnabled = false }
+        val scroll = ScrollView(this).apply { isFocusable = false; isFocusableInTouchMode = false; overScrollMode = View.OVER_SCROLL_NEVER; isVerticalScrollBarEnabled = false }
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         m.items.forEachIndexed { i, entry ->
             val active = i == m.index
@@ -670,6 +716,7 @@ class LauncherActivity : NoTouchActivity() {
     }
 
     private fun launchApp(app: LaunchableApp) {
+        if (app.packageName == CALLS_APP_ID) { openHistory(); return }
         try {
             val launch = packageManager.getLaunchIntentForPackage(app.packageName)
             if (launch == null) { toast("אי אפשר לפתוח את ${app.label}"); return }
@@ -681,6 +728,7 @@ class LauncherActivity : NoTouchActivity() {
     }
 
     private fun showAppActions(app: LaunchableApp) {
+        if (app.packageName == CALLS_APP_ID) { openMenu(app.label, listOf(item("פתח") { openHistory() })); return }
         openMenu(app.label, listOf(
             item("פתח") { launchApp(app) },
             item("פרטי אפליקציה") { startQuiet(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.packageName}")), "לא ניתן לפתוח את פרטי האפליקציה") },
@@ -750,13 +798,17 @@ class LauncherActivity : NoTouchActivity() {
 
     private fun goBack() {
         if (menu != null) { menu = null; render(); return }
+        if (page == Page.APPS && arranging) {
+            if (grabbed) { grabbed = false; saveAppOrder(); render() } else exitArrange()
+            return
+        }
         when (page) {
             Page.HOME -> openContacts()
             Page.SHORTCUTS, Page.APPS -> { page = Page.HOME; selected = 0; render() }
             Page.MANAGE -> { page = returnPage; render() }
             Page.REORDER -> { moving = false; page = returnPage; render() }
             Page.DIAL -> dialBack()
-            Page.HISTORY -> { page = Page.HOME; selected = 0; render() }
+            Page.HISTORY -> { page = historyFrom; selected = 0; render() }
         }
     }
 
@@ -824,13 +876,28 @@ class LauncherActivity : NoTouchActivity() {
             }
             Page.APPS -> {
                 val last = apps.lastIndex
-                when (keyCode) {
-                    KeyEvent.KEYCODE_DPAD_UP -> { if (last >= 0) selectApp((selected - 3).coerceAtLeast(0)); return true }
-                    KeyEvent.KEYCODE_DPAD_DOWN -> { if (last >= 0) selectApp((selected + 3).coerceAtMost(last)); return true }
-                    KeyEvent.KEYCODE_DPAD_LEFT -> { if (last >= 0) selectApp((selected + 1).coerceAtMost(last)); return true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { if (last >= 0) selectApp((selected - 1).coerceAtLeast(0)); return true }
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { openSelected(apps); return true }
-                    KeyEvent.KEYCODE_SOFT_LEFT -> { showOptions(); return true }
+                if (arranging) {
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_UP -> { arrangeMove(-3); return true }
+                        KeyEvent.KEYCODE_DPAD_DOWN -> { arrangeMove(3); return true }
+                        KeyEvent.KEYCODE_DPAD_LEFT -> { arrangeMove(1); return true }
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> { arrangeMove(-1); return true }
+                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                            grabbed = !grabbed
+                            if (!grabbed) saveAppOrder()
+                            render()
+                            return true
+                        }
+                        KeyEvent.KEYCODE_SOFT_LEFT -> { exitArrange(); return true }
+                    }
+                } else {
+                    when (keyCode) {
+                        KeyEvent.KEYCODE_DPAD_UP -> { if (last >= 0) selectApp((selected - 3).coerceAtLeast(0)); return true }
+                        KeyEvent.KEYCODE_DPAD_DOWN -> { if (last >= 0) selectApp((selected + 3).coerceAtMost(last)); return true }
+                        KeyEvent.KEYCODE_DPAD_LEFT -> { if (last >= 0) selectApp((selected + 1).coerceAtMost(last)); return true }
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> { if (last >= 0) selectApp((selected - 1).coerceAtLeast(0)); return true }
+                        KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { openSelected(apps); return true }
+                    }
                 }
             }
             Page.MANAGE -> when (keyCode) {
@@ -1027,6 +1094,7 @@ class LauncherActivity : NoTouchActivity() {
         }
         historyRows = loadHistory()
         selected = 0
+        historyFrom = if (page == Page.APPS || page == Page.SHORTCUTS) page else Page.HOME
         page = Page.HISTORY
         render()
     }
@@ -1063,7 +1131,7 @@ class LauncherActivity : NoTouchActivity() {
         wrapper.addView(label("היסטוריית שיחות", 16, YELLOW, true).apply { gravity = Gravity.CENTER_VERTICAL or Gravity.RIGHT }, LinearLayout.LayoutParams(-1, dp(32)))
         wrapper.addView(View(this).apply { setBackgroundColor(YELLOW) }, LinearLayout.LayoutParams(-1, dp(2)).apply { bottomMargin = dp(6) })
         listRows.clear()
-        val scroll = ScrollView(this).apply { isFillViewport = false; overScrollMode = View.OVER_SCROLL_NEVER }
+        val scroll = ScrollView(this).apply { isFocusable = false; isFocusableInTouchMode = false; isFillViewport = false; overScrollMode = View.OVER_SCROLL_NEVER }
         listScroll = scroll
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         if (historyRows.isEmpty()) {
@@ -1101,7 +1169,7 @@ class LauncherActivity : NoTouchActivity() {
         }, LinearLayout.LayoutParams(-1, dp(56)))
         wrapper.addView(View(this).apply { setBackgroundColor(YELLOW) }, LinearLayout.LayoutParams(-1, dp(2)).apply { bottomMargin = dp(6) })
         listRows.clear()
-        val scroll = ScrollView(this).apply { isFillViewport = false; overScrollMode = View.OVER_SCROLL_NEVER }
+        val scroll = ScrollView(this).apply { isFocusable = false; isFocusableInTouchMode = false; isFillViewport = false; overScrollMode = View.OVER_SCROLL_NEVER }
         listScroll = scroll
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         dialRows.forEachIndexed { i, entry ->
@@ -1126,6 +1194,18 @@ class LauncherActivity : NoTouchActivity() {
         wrapper.addView(label(hint, 11, GRAY).apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, 0) }, LinearLayout.LayoutParams(-1, dp(24)))
         frame.addView(wrapper, FrameLayout.LayoutParams(-1, -1))
         scroll.post { list.getChildAt(selected)?.let { scroll.scrollTo(0, it.top) } }
+    }
+
+    /** Red end key on the dialer / calls screen: go home first; the next press switches the screen off. */
+    private fun endKeyBack(): Boolean {
+        if (menu != null || CallManager.calls.isNotEmpty()) return false
+        if (page != Page.DIAL && page != Page.HISTORY) return false
+        dialInput.setLength(0)
+        dialRows = emptyList()
+        page = Page.HOME
+        selected = 0
+        render()
+        return true
     }
 
     private fun focusedCard(): CardsView.Kind? = cardsView?.kinds?.getOrNull(cardFocus)
@@ -1172,6 +1252,7 @@ class LauncherActivity : NoTouchActivity() {
     /** Long press on the center key opens the app menu (open / details / remove). */
     private fun longPressCenter() {
         if (menu != null || centerLongPressHandled) return
+        if (page == Page.APPS && arranging) { centerLongPressHandled = true; return }
         if (page == Page.HOME) {
             // Long press on the song card opens the music app.
             if (cardFocus >= 0) {
@@ -1188,6 +1269,11 @@ class LauncherActivity : NoTouchActivity() {
     override fun onKeyLongPress(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) { longPressCenter(); return true }
         if (keyCode == KeyEvent.KEYCODE_0 && page == Page.DIAL) { dialPlus(); return true }
+        if (keyCode == KeyEvent.KEYCODE_SOFT_LEFT && page == Page.APPS && !arranging && menu == null) {
+            softLeftLong = true      // long press on the left key: the old options menu (manage apps, system settings)
+            showOptions()
+            return true
+        }
         if (keyCode == KeyEvent.KEYCODE_POWER) {
             try { startActivity(Intent(this, PowerMenuActivity::class.java), noAnimation()) } catch (_: Exception) { }
             return true
@@ -1208,6 +1294,12 @@ class LauncherActivity : NoTouchActivity() {
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_ESCAPE) { goBack(); return true }
+        if (keyCode == KeyEvent.KEYCODE_ENDCALL && endKeyBack()) return true
+        if (keyCode == KeyEvent.KEYCODE_SOFT_LEFT && page == Page.APPS && !arranging && menu == null) {
+            if (repeat == 0) { softLeftLong = false; event?.startTracking() }
+            else if (repeat == 1 && !softLeftLong) { softLeftLong = true; showOptions() }
+            return true
+        }
         if (keyCode == KeyEvent.KEYCODE_CALL && menu == null && page == Page.HOME) {
             if (repeat == 0) openHistory()      // green call key with nothing typed: call history
             return true
@@ -1226,6 +1318,12 @@ class LauncherActivity : NoTouchActivity() {
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_SOFT_LEFT && page == Page.APPS && !arranging && menu == null) {
+            val wasLong = softLeftLong || event?.isCanceled == true
+            softLeftLong = false
+            if (!wasLong) enterArrange()      // short press: arrange mode
+            return true
+        }
         if (keyCode == KeyEvent.KEYCODE_POUND && menu == null && (page == Page.HOME || page == Page.DIAL)) {
             dialAppend('#')
             return true
